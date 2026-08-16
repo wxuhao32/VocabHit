@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>VocabHit · 悬浮查词</title>
+  <style>
+    /* 与主应用一致的设计语言：Minimal · Calm · Clean · Premium */
+    :root {
+      --bg: #F7F7F8;
+      --surface: #FFFFFF;
+      --text: #1D1D1F;
+      --text-2: #86868B;
+      --text-3: #B0B0B5;
+      --accent: #5856D6;
+      --hairline: #ECECEE;
+      --font: -apple-system, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", sans-serif;
+      --ease: cubic-bezier(0.32, 0.72, 0, 1);
+    }
+    /* 主题跟随主应用设置（localStorage vc-theme，同源共享）：light/dark/system */
+    html[data-theme="dark"] {
+      --bg: #131315;
+      --surface: #1C1C1E;
+      --text: #F5F5F7;
+      --text-2: #98989D;
+      --text-3: #636366;
+      --accent: #7D7AFF;
+      --hairline: rgba(255,255,255,0.1);
+    }
+    @media (prefers-color-scheme: dark) {
+      html:not([data-theme="light"]) {
+        --bg: #131315;
+        --surface: #1C1C1E;
+        --text: #F5F5F7;
+        --text-2: #98989D;
+        --text-3: #636366;
+        --accent: #7D7AFF;
+        --hairline: rgba(255,255,255,0.1);
+      }
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    /* 窗口 = 悬浮条本体大小；阴影由 Android 原生圆角 outline + elevation 提供（Java 层），
+       页面内不再用任何 CSS 阴影，避免透明窗口合成黑块 */
+    html, body { background: transparent; width: fit-content; font-family: var(--font); }
+    button { font-family: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+    .icon { width: 16px; height: 16px; flex: none; }
+
+    /* ---- 收起态：悬浮查词条（圆角矩形，紧凑精致） ---- */
+    #bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 14px;
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: 14px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 560;
+      letter-spacing: 0.01em;
+      white-space: nowrap; /* 首帧窗口较窄时不折行 */
+      transition: opacity 0.2s ease; /* 仅透明度过渡；尺寸瞬切，避免 reportSize 采到过渡中间值 */
+    }
+    #bar .icon { width: 17px; height: 17px; color: var(--accent); }
+
+    /* ---- 贴边收缩态：小图标方块 + 半透明 ---- */
+    #bar.edge {
+      flex-direction: column;
+      gap: 0;
+      padding: 9px;
+      border-radius: 12px;
+      opacity: 0.5;
+    }
+    #bar.edge span { display: none; }
+    #bar.edge:active { opacity: 1; } /* 触碰立即恢复不透明 */
+
+    /* ---- 展开态：查询面板 ---- */
+    #panel {
+      display: none;
+      width: 286px;
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: 18px;
+      overflow: hidden;
+      animation: panelIn 0.24s var(--ease);
+    }
+    @keyframes panelIn {
+      from { opacity: 0; transform: translateY(8px) scale(0.97); }
+      to { opacity: 1; transform: none; }
+    }
+    .ov-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 12px 11px 14px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .ov-search .icon { color: var(--text-3); }
+    #q {
+      flex: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--text);
+      font-size: 16px; /* ≥16px：防止 WebView 聚焦输入框时自动放大页面（累积变大的根因） */
+      font-weight: 520;
+    }
+    #q::placeholder { color: var(--text-3); font-weight: 400; }
+    /* 清空输入按钮：小号浅色 ✕，与「× 收起」明确区分；输入为空时隐藏（占位保留避免宽度跳动） */
+    .ov-clear {
+      display: flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      color: var(--text-3);
+      opacity: 0; visibility: hidden;
+      transition: opacity 0.15s ease, visibility 0.15s ease;
+      flex: none;
+    }
+    .ov-clear.show { opacity: 1; visibility: visible; }
+    .ov-clear:active { opacity: 0.45; }
+    .ov-clear .icon { width: 12px; height: 12px; }
+    .ov-close {
+      display: flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      color: var(--text-2);
+      background: var(--bg);
+      transition: opacity var(--ease) 0.15s;
+    }
+    .ov-close:active { opacity: 0.5; }
+
+    #result { max-height: 300px; overflow-y: auto; overscroll-behavior: contain; }
+    .hint { padding: 18px 16px; font-size: 13px; color: var(--text-3); text-align: center; }
+    .hit {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      width: 100%;
+      text-align: left;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .hit:last-child { border-bottom: none; }
+    .hit:active { background: var(--bg); }
+    .hit .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .hit-w { font-size: 15px; font-weight: 620; color: var(--text); }
+    .hit-w sup { color: var(--accent); font-size: 10px; margin-left: 3px; }
+    .hit-d { font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* 单词读音扬声器按钮 */
+    .speaker-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      color: var(--text-3);
+      flex: none;
+      transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+    }
+    .speaker-btn:active { background: var(--hairline); color: var(--text); transform: scale(0.9); }
+    .speaker-btn svg { width: 15px; height: 15px; }
+    .d-actions { display: inline-flex; align-items: center; gap: 0; flex: none; margin-left: 6px; }
+
+    .detail { padding: 14px 16px 15px; }
+    .d-word { font-size: 19px; font-weight: 680; color: var(--text); letter-spacing: -0.01em; }
+    .d-word { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .d-word sup { color: var(--accent); font-size: 11px; margin-left: 3px; }
+    .d-ph { font-size: 12.5px; color: var(--text-2); margin: 3px 0 8px; }
+    /* +1 手动计数按钮：简洁、脉冲反馈 */
+    .add-one-btn {
+      flex: none;
+      min-width: 34px;
+      height: 25px;
+      padding: 0 10px;
+      border: none;
+      border-radius: 12.5px;
+      background: rgba(88, 86, 214, 0.1);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1;
+      cursor: pointer;
+      transition: transform 0.12s ease, opacity 0.12s ease;
+      touch-action: manipulation;
+    }
+    .add-one-btn:active { transform: scale(0.88); opacity: 0.8; }
+    .add-one-btn.pulsed { animation: addOnePulse 0.45s cubic-bezier(0.32, 0.72, 0, 1); }
+    @keyframes addOnePulse {
+      0% { transform: scale(1); }
+      35% { transform: scale(1.22); }
+      100% { transform: scale(1); }
+    }
+    .d-line { font-size: 13.5px; color: var(--text); line-height: 1.55; margin-top: 3px; }
+    .d-meta {
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid var(--hairline);
+      font-size: 11.5px;
+      color: var(--text-2);
+      font-weight: 520;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 收起态 -->
+  <button id="bar" type="button" aria-label="查生词">
+    <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
+    </svg>
+    <span>查生词</span>
+  </button>
+
+  <!-- 展开态 -->
+  <div id="panel">
+    <div class="ov-search">
+      <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+        <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
+      </svg>
+      <input id="q" type="text" placeholder="输入单词或短语..." autocomplete="off" />
+      <button class="ov-clear" id="clear" type="button" aria-label="清空输入">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+      </button>
+      <button class="ov-close" id="close" type="button" aria-label="收起">
+        <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8"/>
+        </svg>
+      </button>
+    </div>
+    <div id="result"><p class="hint">输入单词查询，例如 temporary</p></div>
+  </div>
+
+  <script src="js/dict.js"></script>
+  <script src="js/ecdict.js"></script>
+  <script>
+  "use strict";
+  /* ---- 与主应用一致的记录逻辑（localStorage vc-records 同源共享） ---- */
+  const KEY = "vc-records";
+  let records = { day: "", history: [], words: {} };
+
+  /** 词条有效性：考研词书或 ECDICT 已加载分片命中 */
+  const known = (w) => !!DICT_DATA[w] || !!window.ECDICT.get(w);
+
+  const pad2 = (n) => String(n).padStart(2, "0");
+  function vocabDay(now = new Date()) {
+    const s = new Date(now.getTime() - 4 * 3600 * 1000); // 每日 04:00 重置
+    return `${s.getFullYear()}-${pad2(s.getMonth() + 1)}-${pad2(s.getDate())}`;
+  }
+  function load() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || "null");
+      if (saved && saved.words) records = saved;
+    } catch (_) {}
+    migrateLegacyStarred();
+    rollover();
+  }
+  /** 老数据兼容：仅补 firstQueriedAt（无害字段）。不再自动补录「查询过但未收藏」的词
+      —— 悬浮窗常驻 + 同源共享 localStorage，补录会把主应用删除的词重新加入生词本（复活） */
+  function migrateLegacyStarred() {
+    let changed = false;
+    for (const w of Object.keys(records.words)) {
+      const r = records.words[w];
+      if (!r.firstQueriedAt) {
+        r.firstQueriedAt = r.starredAt || r.last || Date.now();
+        changed = true;
+      }
+    }
+    if (changed) save();
+  }
+  function save() { localStorage.setItem(KEY, JSON.stringify(records)); }
+  function rollover() {
+    const day = vocabDay();
+    if (records.day === day) return;
+    records.day = day;
+    for (const w of Object.keys(records.words)) records.words[w].today = 0;
+    save(); // 查询记录永久保留，不随业务日清空
+  }
+  /** 写操作前同步最新数据（悬浮窗常驻，内存可能滞后于主应用删除/修改 → 先 load 防覆盖） */
+  function fresh() { load(); }
+  /** 记录一次查询到历史（查询 ≠ 加入生词本：只进历史，不进生词计数） */
+  function recordHistory(word) {
+    const w = String(word).trim().toLowerCase();
+    if (!known(w)) return;
+    fresh(); // 同步最新（主应用可能已删除记录/生词）
+    rollover();
+    const now = new Date();
+    records.history.push({ t: `${pad2(now.getHours())}:${pad2(now.getMinutes())}`, w, ts: Date.now() });
+    save();
+  }
+  /** 确认查询（回车/点击候选）：进入今日生词并累计次数；
+      首次成为生词时同步建立历史生词记录（words 以单词为 key，天然去重）；
+      用户删除过的词（deleted）不自动加回生词本 */
+  function confirm(word) {
+    const w = String(word).trim().toLowerCase();
+    if (!known(w)) return;
+    fresh();
+    rollover();
+    const r = records.words[w] || { today: 0, total: 0, first: records.day, last: 0, starred: false, starredAt: 0 };
+    r.today += 1; r.total += 1; r.last = Date.now();
+    if (!r.starred && !r.deleted) { // 首次进入今日生词 → 同时进入历史生词（长期保留）
+      r.starred = true; r.starredAt = Date.now();
+    }
+    records.words[w] = r;
+    save();
+  }
+  const meta = (w) => records.words[w] || { today: 0, total: 0 };
+
+  /* ---- 词典工具 ---- */
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  /** 词条查询：考研优先，ECDICT 已加载分片兜底 */
+  function entry(w) {
+    const k = DICT_DATA[w];
+    if (k) return k;
+    return window.ECDICT.get(w);
+  }
+  const ph = (w) => {
+    const d = entry(w);
+    return d && (d.ph || d.p) ? `/${(d.ph || d.p)}/` : "";
+  };
+  /** ECDICT 词条（{p,s}）→ senses 结构 */
+  function ecdictSenses(d) {
+    if (!d || !d.s) return [];
+    return d.s.split("\n").map((ln) => {
+      ln = ln.trim();
+      if (!ln) return ["", []];
+      const m = ln.match(/^((?:\[[^\]\n]{1,20}\]|[a-z]{1,8}\.)\s*)(.*)$/i);
+      if (m) return [m[1].trim(), [m[2] || ln]];
+      return ["", [ln]];
+    }).filter(([, ss]) => ss.length);
+  }
+  const sensesOf = (d) => (d && d.senses ? d.senses : ecdictSenses(d));
+  function brief(w) {
+    const d = entry(w);
+    if (!d) return "";
+    const [pos, ss] = sensesOf(d)[0] || ["", []];
+    return `${pos ? pos + " " : ""}${ss.slice(0, 3).join("；")}`;
+  }
+  const lines = (w) => sensesOf(entry(w))
+    .map(([pos, ss]) => `${pos ? pos + " " : ""}${ss.join("；")}`);
+  function search(q, limit = 5) {
+    q = q.trim().toLowerCase();
+    if (!q) return [];
+    const ex = [], pre = [], con = [];
+    for (const w of Object.keys(DICT_DATA)) {
+      if (w === q) ex.push(w);
+      else if (w.startsWith(q)) pre.push(w);
+      else if (w.includes(q)) con.push(w);
+      if (ex.length + pre.length + con.length >= limit * 3) break;
+    }
+    return [...ex, ...pre, ...con].slice(0, limit);
+  }
+
+  /* ---- 主题跟随主应用（vc-theme 同源共享） ---- */
+  function syncTheme() {
+    try { document.documentElement.dataset.theme = localStorage.getItem("vc-theme") || "system"; }
+    catch (_) {}
+  }
+
+  /* ---- 状态机：收起 ⇄ 展开 ⇄ 贴边收缩（尺寸/焦点同步给原生窗口） ---- */
+  const bar = document.getElementById("bar");
+  const panel = document.getElementById("panel");
+  const q = document.getElementById("q");
+  const clearBtn = document.getElementById("clear");
+  const result = document.getElementById("result");
+  const native = typeof AndroidOverlay !== "undefined";
+  let expanded = false;
+  let edgeMode = false; // 贴边收缩态（小方块 + 半透明）
+  let sessionWord = null; // 本次查询会话已记入历史的词：连续 Enter/重复点候选不重复记录
+  let sessionConfirmed = null; // 本次查询会话已确认计数（进生词统计）的词
+
+  /** 清空按钮随输入状态显隐（visibility 占位保留，避免输入框宽度跳动） */
+  function updateClearBtn() {
+    clearBtn.classList.toggle("show", !!q.value);
+  }
+
+  let sizeScheduled = false;
+  function reportSize() {
+    if (sizeScheduled) return; // 合并：同一帧内多次触发（连续输入/删除 → 连续查询渲染）只上报一次，
+    // 避免高频 resize → WindowManager 反复 updateViewLayout → 合成层重建残留半透明浅影/阴影
+    sizeScheduled = true;
+    requestAnimationFrame(() => {
+      sizeScheduled = false;
+      const el = expanded ? panel : bar;
+      // offsetWidth/offsetHeight 是布局尺寸：不受入场动画 transform（scale/translate）影响
+      // 高度钳制到设计上限 440（正常 panel 最大 ~416：输入框 60 + 结果区 300 + 内边距 26 + 边框）：
+      // IME 弹出/布局异常时 offsetHeight 偶发 550+，直接上报会让窗口异常变大（截图中的透明大空白）
+      const h = Math.min(el.offsetHeight || 0, 440);
+      if (native) AndroidOverlay.resize(el.offsetWidth, h);
+    });
+  }
+  function expand() {
+    expanded = true;
+    sessionWord = null; // 每次展开面板 = 新的查询会话
+    sessionConfirmed = null;
+    syncTheme(); // 悬浮窗常驻期间主应用可能已切换主题
+    bar.style.display = "none";
+    panel.style.display = "block";
+    result.innerHTML = `<p class="hint">输入单词查询，例如 temporary</p>`;
+    updateClearBtn();
+    if (native) { AndroidOverlay.setDraggable(false); AndroidOverlay.requestFocus(); reportSize(); }
+    setTimeout(() => q.focus(), 60);
+  }
+  function collapse() {
+    expanded = false;
+    sessionWord = null; // 收起面板 = 会话结束
+    sessionConfirmed = null;
+    panel.style.display = "none";
+    bar.style.display = "flex";
+    q.value = ""; q.blur();
+    updateClearBtn();
+    if (native) { AndroidOverlay.setDraggable(true); AndroidOverlay.releaseFocus(); reportSize(); }
+  }
+  window.__back = () => { if (expanded) collapse(); }; // 返回键 → 收起
+
+  /* ---- 贴边收缩：原生吸附动画结束后调用 ---- */
+  window.__enterEdge = function () {
+    if (expanded) return; // 展开态不收缩
+    edgeMode = true;
+    bar.classList.add("edge");
+    reportSize(); // 新尺寸上报后原生自动贴边定位
+  };
+  /** 退出收缩态：恢复标准尺寸/不透明，原生把窗口移回屏内 */
+  function exitEdge() {
+    if (!edgeMode) return;
+    edgeMode = false;
+    bar.classList.remove("edge");
+    if (native) AndroidOverlay.exitEdge();
+    reportSize();
+  }
+
+  /* ---- 单词读音（系统 TTS，纯辅助） ---- */
+  const SPEAKER_SVG = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5v5h3l4 3.5v-12L7 7.5H4z"/><path d="M14 8a3.5 3.5 0 0 1 0 4M15.5 6a6 6 0 0 1 0 8"/></svg>`;
+  /* 单词读音：Web Speech 优先 → 有道在线发音兜底（联网即可出声，不依赖系统 TTS） */
+  let ttsAudioRef = null;
+  let ttsSpeechTimer = null;
+  function ttsSpeak(word, times = 1) {
+    const w = String(word).trim().toLowerCase();
+    if (!w) return;
+    const n = Math.max(1, times);
+    let canSpeech = false;
+    try {
+      canSpeech = typeof speechSynthesis !== "undefined"
+        && typeof SpeechSynthesisUtterance !== "undefined"
+        && typeof speechSynthesis.getVoices === "function"
+        && speechSynthesis.getVoices().length > 0;
+    } catch (_) { canSpeech = false; }
+    if (canSpeech) {
+      try {
+        speechSynthesis.cancel();
+        let started = false;
+        const fallback = () => {
+          if (started) return;
+          started = true;
+          try { speechSynthesis.cancel(); } catch (_) {}
+          ttsSpeakOnline(w, n);
+        };
+        for (let i = 0; i < n; i++) {
+          const u = new (window.SpeechSynthesisUtterance)(w);
+          u.lang = "en-US";
+          u.rate = 0.9;
+          if (i === 0) u.onstart = () => { started = true; };
+          speechSynthesis.speak(u);
+        }
+        if (ttsSpeechTimer) clearTimeout(ttsSpeechTimer);
+        ttsSpeechTimer = setTimeout(fallback, 2500);
+        return;
+      } catch (_) { /* 走在线兜底 */ }
+    }
+    ttsSpeakOnline(w, n);
+  }
+  function ttsSpeakOnline(w, times) {
+    try {
+      ttsStopAudio();
+      const url = "https://dict.youdao.com/dictvoice?audio=" + encodeURIComponent(w) + "&type=1";
+      const a = new Audio(url);
+      a.onerror = function () { /* 静默 */ };
+      const p = a.play();
+      if (p && p.catch) p.catch(function () {});
+      ttsAudioRef = a;
+      if (times > 1) {
+        let played = 1;
+        a.onended = function () {
+          if (played >= times) { ttsAudioRef = null; return; }
+          played++;
+          try {
+            const b = new Audio(url);
+            const pb = b.play();
+            if (pb && pb.catch) pb.catch(function () {});
+            ttsAudioRef = b;
+          } catch (_) { /* 静默 */ }
+        };
+      }
+    } catch (_) { /* 静默 */ }
+  }
+  function ttsStopAudio() {
+    if (ttsAudioRef) { try { ttsAudioRef.pause(); } catch (_) {} ttsAudioRef = null; }
+  }
+  function ttsStop() {
+    try { if (speechSynthesis) speechSynthesis.cancel(); } catch (_) {}
+    if (ttsSpeechTimer) { clearTimeout(ttsSpeechTimer); ttsSpeechTimer = null; }
+    ttsStopAudio();
+  }
+
+  function renderDetail(w) {
+    const m = meta(w);
+    result.innerHTML = `<div class="detail">
+      <p class="d-word"><span>${esc(w)}<sup>${m.today}</sup></span><span class="d-actions"><span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span><button class="add-one-btn" data-addone="${esc(w)}" type="button">+1</button></span></p>
+      <p class="d-ph">${esc(ph(w))}</p>
+      ${lines(w).map((l) => `<p class="d-line">${esc(l)}</p>`).join("")}
+      <p class="d-meta">今日查询 ${m.today} 次 · 累计查询 ${m.total} 次</p>
+    </div>`;
+    requestAnimationFrame(reportSize); // 等下一帧 layout 稳定后再测尺寸，避免 IME 抖动/刚 innerHTML 后的中间值被上报 → params.height 偏小 → 内容被截切
+  }
+  /** +1 手动计数：与回车共用同一套 today/total 计数，每点击一次 +1 */
+  function addOne(word) {
+    const w = String(word).trim().toLowerCase();
+    if (!known(w)) return;
+    fresh(); // 同步最新（防覆盖主应用删除/修改）
+    rollover();
+    const r = records.words[w] || { today: 0, total: 0, first: records.day, last: 0, starred: false, starredAt: 0 };
+    r.today += 1; r.total += 1; r.last = Date.now();
+    if (!r.starred && !r.deleted) { r.starred = true; r.starredAt = Date.now(); }
+    records.words[w] = r;
+    save();
+    if (q.value.trim().toLowerCase() === w) renderDetail(w);
+    reportSize();
+  }
+  function renderHits(list, raw) {
+    result.innerHTML = list.length
+      ? list.map((w) => `<button class="hit" data-w="${esc(w)}" type="button">
+          <span class="row-main">
+            <span class="hit-w">${esc(w)}${meta(w).total ? `<sup>${meta(w).total}</sup>` : ""}</span>
+            <span class="hit-d">${esc(brief(w))}</span>
+          </span>
+          <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+        </button>`).join("")
+      : `<p class="hint">词典未收录「${esc(raw)}」</p>`;
+    requestAnimationFrame(reportSize); // 同 renderDetail：等下一帧 layout 稳定后再测
+  }
+
+  bar.addEventListener("click", () => {
+    if (edgeMode) exitEdge(); // 贴边收缩态：先恢复标准态
+    expand(); // 再展开查询面板
+  });
+  document.getElementById("close").addEventListener("click", collapse);
+  result.addEventListener("click", (e) => {
+    const spk = e.target.closest(".speaker-btn");
+    if (spk) {
+      e.stopPropagation();
+      ttsSpeak(spk.dataset.speak, 1);
+      return;
+    }
+    const one = e.target.closest(".add-one-btn");
+    if (one) {
+      e.stopPropagation();
+      one.classList.remove("pulsed");
+      void one.offsetWidth;
+      one.classList.add("pulsed");
+      addOne(one.dataset.addone);
+      return;
+    }
+    const hit = e.target.closest(".hit");
+    if (!hit) return;
+    const w = hit.dataset.w;
+    if (w !== sessionWord) { // 重复点击同一候选不重复记录
+      recordHistory(w);
+      sessionWord = w;
+    }
+    if (w !== sessionConfirmed) {
+      confirm(w);
+      sessionConfirmed = w;
+    }
+    q.value = w;
+    renderDetail(w);
+  });
+  q.addEventListener("input", () => {
+    const v = q.value.trim().toLowerCase();
+    // 内容与已记录词不同 = 旧会话失效（之后再次命中算新查询）
+    if (v !== sessionWord) {
+      sessionWord = null;
+      sessionConfirmed = null;
+    }
+    // 输入即查：精确命中词典 = 查询已实际完成 → 记入历史（不进生词本）
+    if (v && v !== sessionWord) {
+      const hit = entry(v); // 考研或 ECDICT 已加载分片
+      if (hit) {
+        recordHistory(v);
+        sessionWord = v;
+      } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
+        window.ECDICT.getAsync(v).then((d) => {
+          if (d && v !== sessionWord && q.value.trim().toLowerCase() === v) {
+            recordHistory(v);
+            sessionWord = v;
+          }
+        });
+      }
+    }
+    const raw = q.value.trim();
+    if (!raw) {
+      // 搜索词清空：正确清理词条内容（innerHTML 整体替换销毁旧词条 View/背景/阴影），
+      // 并强制上报新高度 —— 之前此分支漏调 reportSize，导致 params.height 停留在旧结果区高度，
+      // 悬浮条下方残留大片透明区域（用户看到的透明浅影/残影）。
+      // 用 resizeForce：绕过 IME_JITTER 忽略，确保"空状态"收敛高度立即生效
+      result.innerHTML = `<p class="hint">输入单词查询，例如 temporary</p>`;
+      updateClearBtn();
+      requestAnimationFrame(() => {
+        const h = Math.min(panel.offsetHeight || 0, 440);
+        if (native) AndroidOverlay.resizeForce(panel.offsetWidth, h);
+      });
+      return;
+    }
+    updateClearBtn();
+    const exact = raw.toLowerCase();
+    if (entry(exact)) renderDetail(exact);
+    else {
+      const hits = search(raw);
+      if (hits.length) renderHits(hits, raw);
+      else if (/^[a-z][a-z' .\-]*$/.test(exact)) {
+        // 考研候选为空 → ECDICT 兜底
+        window.ECDICT.getAsync(exact).then((d) => {
+          if (q.value.trim().toLowerCase() !== exact) return;
+          if (d) renderDetail(exact);
+          else result.innerHTML = `<p class="hint">词典未收录「${esc(raw)}」</p>`;
+        });
+        result.innerHTML = `<p class="hint">正在查询词典…</p>`;
+      } else {
+        result.innerHTML = `<p class="hint">词典未收录「${esc(raw)}」</p>`;
+      }
+    }
+    reportSize();
+  });
+  q.addEventListener("keydown", async (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const raw = q.value.trim().toLowerCase();
+    let target = entry(raw) ? raw : null; // 考研 / ECDICT 已加载
+    if (!target) target = (await window.ECDICT.getAsync(raw)) ? raw : null; // ECDICT 兜底
+    if (!target) target = search(raw, 1)[0]; // 考研候选
+    if (target) {
+      if (target !== sessionWord) { // 连续 Enter 不重复记录
+        recordHistory(target);
+        sessionWord = target;
+      }
+      if (target !== sessionConfirmed) {
+        confirm(target);
+        sessionConfirmed = target;
+      }
+      q.value = target; renderDetail(target); reportSize(); updateClearBtn();
+    }
+  });
+
+  /* 清空输入：只清空输入框并保持焦点，不关闭悬浮条；通过触发 input 事件复用现有清空逻辑 */
+  clearBtn.addEventListener("click", () => {
+    q.value = "";
+    q.dispatchEvent(new Event("input", { bubbles: true })); // 触发 input 监听 → 重置会话/显示提示
+    q.focus(); // 保持焦点，方便直接输入下一个单词
+    updateClearBtn();
+    reportSize();
+  });
+
+  syncTheme();
+  load();
+  reportSize(); // ready → 原生据此 addView（首帧给最小宽度防折行）
+  setTimeout(reportSize, 300); // 二次校正：窗口收缩到内容真实尺寸
+  </script>
+</body>
+</html>

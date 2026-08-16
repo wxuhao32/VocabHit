@@ -1,0 +1,32 @@
+# Gradle / Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.log
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本机个人文件（不纳入版本库）
+*.docx
+*.pdf
+*.zip
+
+# 调试脚本 / 截图
+.test/
+verify/
+tools/
+*.py
+*.png
+*.jpg
+
+# APK（如需发布 APK 请使用 GitHub Releases）
+*.apk
+!VocabHit-*.apk
+
+# 系统
+.DS_Store
+Thumbs.db
