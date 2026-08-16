@@ -1,0 +1,35 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.wxh.vocabulary"
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.wxh.vocabulary"
+        minSdk 26
+        targetSdk 34
+        versionCode 32
+        versionName "0.7.4"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+// 无第三方依赖：WebView 壳 + 本地词典全部位于 assets 中
+dependencies {
+}
