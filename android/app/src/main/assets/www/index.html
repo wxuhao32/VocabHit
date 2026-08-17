@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#F7F7F8" />
   <title>VocabHit — 考研词汇查询</title>
-  <link rel="stylesheet" href="css/style.css?v=7" />
+  <link rel="stylesheet" href="css/style.css?v=8" />
 </head>
 <body>
 
@@ -182,12 +182,12 @@
           </div>
           <div class="settings-item">
             <div class="settings-item-label">
-              <span>悬浮查词</span>
-              <span class="settings-item-value" id="float-value">开</span>
+              <span>每日重置</span>
+              <span class="settings-item-value">04:00</span>
             </div>
-            <button class="switch" id="float-switch" type="button" role="switch" aria-checked="true" aria-label="悬浮查词">
-              <span class="switch-knob"></span>
-            </button>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
           </div>
           <div class="settings-item" id="overlay-item" hidden>
             <div class="settings-item-label">
@@ -197,15 +197,6 @@
             <button class="switch" id="overlay-switch" type="button" role="switch" aria-checked="false" aria-label="后台悬浮查词">
               <span class="switch-knob"></span>
             </button>
-          </div>
-          <div class="settings-item">
-            <div class="settings-item-label">
-              <span>每日重置</span>
-              <span class="settings-item-value">04:00</span>
-            </div>
-            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 3l5 5-5 5"/>
-            </svg>
           </div>
         </div>
       </section>
@@ -231,7 +222,7 @@
           <div class="settings-item">
             <div class="settings-item-label">
               <span>版本</span>
-              <span class="settings-item-value">0.7.14</span>
+              <span class="settings-item-value">0.7.15</span>
             </div>
           </div>
         </div>
@@ -350,35 +341,6 @@
       </div>
     </main>
 
-    <!-- ============ 悬浮查词条 ============ -->
-    <div class="floating-widget" id="floating-widget" hidden>
-      <div class="float-panel" id="float-panel" aria-hidden="true">
-        <div class="float-search">
-          <svg class="icon icon-s" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-            <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
-          </svg>
-          <input id="float-input" type="text" placeholder="输入单词或短语..." autocomplete="off" />
-          <button class="float-clear" id="float-clear" type="button" aria-label="清空输入">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-              <path d="M4 4l8 8M12 4l-8 8"/>
-            </svg>
-          </button>
-          <button class="float-close" id="float-close" type="button" aria-label="收起">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-              <path d="M4 4l8 8M12 4l-8 8"/>
-            </svg>
-          </button>
-        </div>
-        <div class="float-result" id="float-result"></div>
-      </div>
-      <button class="float-trigger" id="float-trigger" type="button" aria-label="查生词">
-        <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-          <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
-        </svg>
-        <span>查生词</span>
-      </button>
-    </div>
-
     <!-- ============ 搜索 Bottom Sheet ============ -->
     <div class="sheet-overlay" id="sheet-overlay" aria-hidden="true"></div>
     <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-hidden="true">
@@ -427,6 +389,6 @@
 
   <script src="js/dict.js"></script>
   <script src="js/ecdict.js"></script>
-  <script src="js/app.js?v=11"></script>
+  <script src="js/app.js?v=12"></script>
 </body>
 </html>

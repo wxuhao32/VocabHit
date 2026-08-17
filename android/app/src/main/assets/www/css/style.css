@@ -325,27 +325,51 @@ ul { list-style: none; }
 /* ---------- 历史记录（Activity Feed） ---------- */
 .history-list { margin-top: 4px; }
 
-/* 行 = 记录主体 + 右侧删除按钮 */
+/* 行 = 记录主体 + 右侧操作按钮 */
 .history-list li { display: flex; align-items: center; }
 .history-list li:last-child .history-item { border-bottom: none; }
 
+/* 记录主体：单词 → 释义 → 查询时间 三行纵排，全部左对齐，视觉层级递弱 */
 .history-item {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 5px;
+  gap: 3px;
   flex: 1;
   min-width: 0;
-  padding: 11px 4px 10px 8px;
+  padding: 12px 10px 11px 14px;
   border-bottom: 1px solid var(--hairline);
+  text-align: left;
   animation: rowIn 0.3s var(--ease) both;
 }
-/* 主行：圆点 + 单词 + 释义（水平） */
-.history-main {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+
+.history-word {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+
+.history-def {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.45;
+}
+
+/* 查询时间：最小号、左对齐、等宽数字，紧凑单行；完整保留「年月日 + 时分」 */
+.history-time {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.015em;
+  white-space: nowrap;
+  line-height: 1.3;
+  margin-top: 2px;
 }
 
 /* 单条删除按钮（生词行 / 记录行通用） */
@@ -363,28 +387,6 @@ ul { list-style: none; }
 .del-btn:active { color: var(--text); background: var(--hairline); transform: scale(0.9); }
 .del-btn svg { width: 16px; height: 16px; }
 
-/* 时间：辅助信息，小字号横向单行，紧贴下分界线；对齐圆点+单词（5px dot + 8px gap = 13px） */
-.history-time {
-  font-size: 10.5px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  padding-left: 13px;
-  line-height: 1;
-}
-
-.history-word { font-size: 15px; font-weight: 550; letter-spacing: -0.005em; }
-
-.history-def {
-  margin-left: auto;
-  font-size: 12.5px;
-  color: var(--text-3);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 46%;
-}
-
 /* 空状态 */
 .empty-state {
   padding: 30px 18px;
@@ -395,39 +397,19 @@ ul { list-style: none; }
 }
 .empty-state span { font-size: 12.5px; color: var(--text-3); }
 
-/* 悬浮面板候选行 */
-.float-hit {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  text-align: left;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--hairline);
-  transition: background var(--t-fast) ease;
-}
-.float-hit:last-child { border-bottom: none; }
-.float-hit:active { background: var(--surface-2); }
-.float-hit-def {
-  font-size: 12px;
-  color: var(--text-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.history-dot {
-  width: 5px; height: 5px;
-  border-radius: 50%;
-  background: var(--hairline-strong);
-  flex: none;
-}
-
 .history-more {
   text-align: center;
   padding: 14px 0 4px;
   font-size: 13px;
   color: var(--text-3);
+}
+
+/* 小屏：压缩内边距，避免单词/释义/时间挤压 */
+@media (max-width: 374px) {
+  .history-item { padding-left: 12px; }
+  .history-word { font-size: 14.5px; }
+  .history-def { font-size: 12px; }
+  .history-time { font-size: 10.5px; }
 }
 
 /* ---------- 设置 ---------- */
@@ -597,113 +579,6 @@ ul { list-style: none; }
 }
 .primary-btn:active { transform: scale(0.98); opacity: 0.88; }
 
-/* ---------- 悬浮查词条 Floating Search Bar ---------- */
-.floating-widget {
-  position: fixed;
-  right: calc(50% - min(215px, 50%) + 16px);
-  bottom: calc(86px + var(--sab) + var(--ime)); /* 键盘弹出时整体位于输入法上方 */
-  z-index: 60;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
-  pointer-events: none;
-}
-.floating-widget > * { pointer-events: auto; }
-
-/* 收起态：精致悬浮条 */
-.float-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 42px;
-  padding: 0 18px;
-  border-radius: 21px;
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 550;
-  filter: drop-shadow(0 4px 18px rgba(0, 0, 0, 0.10));
-  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
-}
-.float-trigger .icon { width: 16px; height: 16px; color: var(--accent); }
-.float-trigger:active { transform: scale(0.94); }
-
-/* 展开态：输入条 + 结果 */
-.float-panel {
-  width: min(300px, calc(100vw - 32px));
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: 16px;
-  filter: var(--shadow-float);
-  overflow: hidden;
-  transform-origin: bottom right;
-  transform: translateY(6px) scale(0.96);
-  opacity: 0;
-  pointer-events: none;
-  transition: transform var(--t-med) var(--ease), opacity var(--t-fast) ease;
-}
-
-.float-panel.open {
-  transform: translateY(0) scale(1);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.float-search {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--hairline);
-  color: var(--text-3);
-}
-
-.float-search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 14.5px;
-}
-.float-search input::placeholder { color: var(--text-3); }
-
-.float-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px; height: 26px;
-  border-radius: 8px;
-  color: var(--text-3);
-  flex: none;
-  transition: background var(--t-fast) ease, color var(--t-fast) ease;
-}
-.float-close svg { width: 13px; height: 13px; }
-.float-close:active { background: var(--hairline); color: var(--text); }
-
-/* 清空输入按钮：小号浅色 ✕，与「× 收起」明确区分；输入为空时隐藏（占位保留避免宽度跳动） */
-.float-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px; height: 22px;
-  border-radius: 50%;
-  color: var(--text-3);
-  flex: none;
-  opacity: 0; visibility: hidden;
-  transition: opacity var(--t-fast) ease, visibility var(--t-fast) ease;
-}
-.float-clear.show { opacity: 1; visibility: visible; }
-.float-clear:active { opacity: 0.45; }
-.float-clear svg { width: 12px; height: 12px; }
-
-.float-result { max-height: 264px; overflow-y: auto; overscroll-behavior: contain; }
-
-.float-result-word { padding: 12px 14px; }
-.float-result-empty { padding: 14px; font-size: 13px; color: var(--text-3); }
-
 /* ---------- Bottom Sheet ---------- */
 .sheet-overlay {
   position: fixed;
@@ -811,8 +686,6 @@ ul { list-style: none; }
 .speaker-btn svg { width: 16px; height: 16px; }
 .word-item .speaker-btn { margin-right: 2px; }
 .result-row { display: flex; align-items: center; gap: 8px; }
-.float-hit { display: flex; flex-direction: row; align-items: center; gap: 8px; }
-.float-hit .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .review-word-row { display: flex; align-items: center; justify-content: center; gap: 10px; }
 .review-word-speaker { color: var(--text-3); }
 .review-detail-word { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
@@ -979,7 +852,6 @@ ul { list-style: none; }
 
 /* 隐藏底部导航、悬浮查词；Review 页铺满全屏（限 430 取景框，桌面预览居中） */
 body.review-active .tabbar { display: none; }
-body.review-active .floating-widget { display: none; }
 body.review-active #page-review {
   position: fixed;
   inset: 0;

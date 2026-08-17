@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#F7F7F8" />
-  <title>VocabHit — 考研词汇查询</title>
-  <link rel="stylesheet" href="css/style.css?v=8" />
+  <title>VocabHit · 复习预览（测试数据）</title>
+  <link rel="stylesheet" href="css/style.css?v=7" />
 </head>
 <body>
 
@@ -182,12 +182,12 @@
           </div>
           <div class="settings-item">
             <div class="settings-item-label">
-              <span>每日重置</span>
-              <span class="settings-item-value">04:00</span>
+              <span>悬浮查词</span>
+              <span class="settings-item-value" id="float-value">开</span>
             </div>
-            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 3l5 5-5 5"/>
-            </svg>
+            <button class="switch" id="float-switch" type="button" role="switch" aria-checked="true" aria-label="悬浮查词">
+              <span class="switch-knob"></span>
+            </button>
           </div>
           <div class="settings-item" id="overlay-item" hidden>
             <div class="settings-item-label">
@@ -197,6 +197,15 @@
             <button class="switch" id="overlay-switch" type="button" role="switch" aria-checked="false" aria-label="后台悬浮查词">
               <span class="switch-knob"></span>
             </button>
+          </div>
+          <div class="settings-item">
+            <div class="settings-item-label">
+              <span>每日重置</span>
+              <span class="settings-item-value">04:00</span>
+            </div>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
           </div>
         </div>
       </section>
@@ -222,7 +231,7 @@
           <div class="settings-item">
             <div class="settings-item-label">
               <span>版本</span>
-              <span class="settings-item-value">0.7.15</span>
+              <span class="settings-item-value">0.7.14</span>
             </div>
           </div>
         </div>
@@ -341,6 +350,35 @@
       </div>
     </main>
 
+    <!-- ============ 悬浮查词条 ============ -->
+    <div class="floating-widget" id="floating-widget" hidden>
+      <div class="float-panel" id="float-panel" aria-hidden="true">
+        <div class="float-search">
+          <svg class="icon icon-s" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
+          </svg>
+          <input id="float-input" type="text" placeholder="输入单词或短语..." autocomplete="off" />
+          <button class="float-clear" id="float-clear" type="button" aria-label="清空输入">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+              <path d="M4 4l8 8M12 4l-8 8"/>
+            </svg>
+          </button>
+          <button class="float-close" id="float-close" type="button" aria-label="收起">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <path d="M4 4l8 8M12 4l-8 8"/>
+            </svg>
+          </button>
+        </div>
+        <div class="float-result" id="float-result"></div>
+      </div>
+      <button class="float-trigger" id="float-trigger" type="button" aria-label="查生词">
+        <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+          <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
+        </svg>
+        <span>查生词</span>
+      </button>
+    </div>
+
     <!-- ============ 搜索 Bottom Sheet ============ -->
     <div class="sheet-overlay" id="sheet-overlay" aria-hidden="true"></div>
     <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-hidden="true">
@@ -389,6 +427,39 @@
 
   <script src="js/dict.js"></script>
   <script src="js/ecdict.js"></script>
-  <script src="js/app.js?v=12"></script>
+  <script src="js/app.js?v=11"></script>
+<!-- 预览专用：自动注入测试数据并进入复习（不改动源文件） -->
+<script>
+(function(){
+  function vocabDay(now){now=now||Date.now();var d=new Date(now-4*3600*1000);var p=function(n){return String(n).padStart(2,"0");};return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate());}
+  function shuffle(a){var r=a.slice();for(var i=r.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=r[i];r[i]=r[j];r[j]=t;}return r;}
+  var WORDS=[
+    {w:"abandon",known:3,fuzzy:1,unknown:0,stage:2,mode:"long"},
+    {w:"ambiguous",known:2,fuzzy:2,unknown:1,stage:1,mode:"daily"},
+    {w:"articulate",known:5,fuzzy:0,unknown:1,stage:3,mode:"long"},
+    {w:"comprehensive",known:4,fuzzy:1,unknown:0,stage:2,mode:"booster"},
+    {w:"circumstance",known:7,fuzzy:1,unknown:0,stage:4,mode:"long"},
+    {w:"contemplate",known:1,fuzzy:3,unknown:2,stage:1,mode:"long"},
+    {w:"deteriorate",known:0,fuzzy:1,unknown:1,stage:0,mode:""},
+    {w:"fundamental",known:9,fuzzy:2,unknown:0,stage:5,mode:"long"},
+    {w:"simultaneous",known:3,fuzzy:3,unknown:1,stage:3,mode:"daily"},
+    {w:"sophisticated",known:4,fuzzy:2,unknown:1,stage:2,mode:"long"},
+    {w:"tremendous",known:2,fuzzy:3,unknown:0,stage:1,mode:"booster"},
+    {w:"vulnerable",known:11,fuzzy:1,unknown:0,stage:6,mode:"long"}
+  ];
+  var params=new URLSearchParams(location.search);var mode=params.get("mode")==="spell"?"spell":"meaning";
+  var now=Date.now();var dayOld=vocabDay(now-7*86400000);
+  var records={day:vocabDay(now),history:[],words:{}};
+  var review={words:{}};
+  WORDS.forEach(function(x,i){var total=x.known+x.fuzzy+x.unknown;records.words[x.w]={today:1,total:total,first:dayOld,last:now-3600000,starred:true,starredAt:now-7*86400000,firstQueriedAt:now-7*86400000,deleted:false};review.words[x.w]={known:x.known,fuzzy:x.fuzzy,unknown:x.unknown,total:total,firstAt:now-7*86400000,lastAt:now-3600000,stage:x.stage,mode:x.mode,origStage:(x.mode==="daily"||x.mode==="booster")?Math.max(1,x.stage):0,nextAt:now-(WORDS.length-i)*600000};});
+  var queue=WORDS.map(function(x){return x.w;});
+  var session={day:vocabDay(now),phase:mode,queue:queue,idx:0,step:"answer",current:null,lastResult:null,snapshot:null,stats:{n:0,known:0,fuzzy:0,unknown:0},spellQueue:mode==="spell"?shuffle(queue):[],spellIdx:0,spell:{submitted:false,correct:false,input:""},spellStats:{correct:0,wrong:0,skipped:0}};
+  localStorage.setItem("vc-records",JSON.stringify(records));
+  localStorage.setItem("vc-review",JSON.stringify(review));
+  localStorage.setItem("vc-review-session-v2",JSON.stringify(session));
+  try{loadRecords();loadReview();syncReviewWithWords();}catch(e){}
+  setTimeout(function(){try{openReview();}catch(e){console.error(e);}},250);
+})();
+</script>
 </body>
 </html>

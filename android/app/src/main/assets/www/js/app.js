@@ -298,7 +298,6 @@ function addOne(word) {
   if (rec.starred) ensureReviewEntry(w); // 生词进入 Review 队列；未收藏的词不进 Review
   // 刷新当前详情视图（数字立即变化）+ 全局列表
   if (sheetOpen && sheetInput.value.trim().toLowerCase() === w) renderSheetDetail(w);
-  if (floatOpen && floatInput.value.trim().toLowerCase() === w) renderFloatDetail(w);
   renderAll();
 }
 
@@ -720,10 +719,9 @@ function renderReviewByPhase() {
   
   if (reviewSession.phase === "spell") {
     if (reviewSession.spellIdx >= reviewSession.spellQueue.length) {
-      // Phase 2 完成
+      // Phase 2 完成：清空已结束的会话（勿再 saveReviewSession 回写，否则重启后残留"已完成"会话）
       reviewSession.phase = "done";
       clearReviewSession();
-      saveReviewSession();
       return rvRender(() => renderDone(body));
     }
     reviewSession.current = reviewSession.spellQueue[reviewSession.spellIdx];
@@ -2025,11 +2023,8 @@ function renderHistory() {
           : `<button class="star-btn" data-star="${esc(h.w)}" type="button">加入</button>`;
         return `<li>
           <button class="history-item" data-word="${esc(h.w)}" data-review="1" style="animation-delay:${Math.min(i, 20) * 25}ms" type="button">
-            <span class="history-main">
-              <span class="history-dot"></span>
-              <span class="history-word">${esc(h.w)}</span>
-              <span class="history-def">${esc(briefOf(h.w).split("；")[0])}</span>
-            </span>
+            <span class="history-word">${esc(h.w)}</span>
+            <span class="history-def">${esc(briefOf(h.w).split("；")[0])}</span>
             <span class="history-time">${esc(fmtDateTime(h.ts))}</span>
           </button>
           ${action}
@@ -2055,9 +2050,8 @@ function renderAll() {
 /* ---------- 页面切换 ---------- */
 
 function switchTab(name) {
-  // 切换页面时清理全局浮层（词典搜索面板/悬浮查词），避免残留叠加到其他页面
+  // 切换页面时清理全局浮层（词典搜索面板），避免残留叠加到其他页面
   if (typeof closeSheet === "function" && sheetOpen) closeSheet();
-  if (typeof closeFloatPanel === "function" && floatOpen) closeFloatPanel();
   $$(".page").forEach((p) => p.classList.remove("active"));
   const page = $(`#page-${name}`);
   void page.offsetWidth;
@@ -2316,7 +2310,6 @@ $("#habits-body").addEventListener("click", () => {});
 window.__back = function () {
   if (pomo.running) { pomoClose(); return true; } // 番茄钟运行中 → 关闭并退出全屏
   if (sheetOpen) { closeSheet(); return true; }
-  if (floatOpen) { closeFloatPanel(); return true; }
   const active = $(".page.active");
   if (active && active.id === "page-review") {
     ttsStop();
@@ -2548,20 +2541,18 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (sheetOpen) closeSheet();
-    closeFloatPanel();
   }
 });
 
-/* 任务模块输入框获得焦点时，确保词典搜索面板/悬浮查词不叠加显示（输入状态互相独立） */
+/* 任务模块输入框获得焦点时，确保词典搜索面板不叠加显示（输入状态互相独立） */
 document.addEventListener("focusin", (e) => {
   if (!e.target || !e.target.closest) return;
   if (e.target.closest("#task-form-panel") || e.target.closest("#pomo-config")) {
     if (sheetOpen) closeSheet();
-    if (floatOpen) closeFloatPanel();
   }
 });
 
-/* ---------- 设置：外观 / 悬浮查词 / 后台悬浮查词 ---------- */
+/* ---------- 设置：外观 / 后台悬浮查词（系统级 Overlay） ---------- */
 
 const html = document.documentElement;
 const metaTheme = $('meta[name="theme-color"]');
@@ -2579,18 +2570,9 @@ function applyTheme(mode, persist = true) {
   if (hasBridge()) window.AndroidBridge.setSystemBarsDark(dark); // 状态栏图标随主题
 }
 
-function applyFloating(on, persist = true) {
-  $("#floating-widget").hidden = !on;
-  $("#float-switch").setAttribute("aria-checked", String(on));
-  $("#float-value").textContent = on ? "开" : "关";
-  if (persist) localStorage.setItem("vc-float", on ? "1" : "0");
-  if (!on) closeFloatPanel();
-}
-
 $$("#appearance-seg .seg-btn").forEach((b) =>
   b.addEventListener("click", () => applyTheme(b.dataset.value))
 );
-$("#float-switch").addEventListener("click", () => applyFloating($("#float-switch").getAttribute("aria-checked") !== "true"));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
   if (html.dataset.theme === "system") applyTheme("system", false);
 });
@@ -2631,163 +2613,6 @@ function initOverlay() {
     applyOverlayUI(false);
   }
 }
-
-/* ---------- 悬浮查词条 ---------- */
-
-const floatPanel = $("#float-panel");
-const floatInput = $("#float-input");
-const floatResult = $("#float-result");
-const floatClear = $("#float-clear");
-let floatOpen = false;
-
-/** 清空按钮随输入状态显隐（visibility 占位保留，避免输入框宽度跳动） */
-function updateFloatClear() {
-  floatClear.classList.toggle("show", !!floatInput.value);
-}
-
-function renderFloatDetail(word) {
-  const m = wordMeta(word);
-  floatResult.innerHTML = `<div class="float-result-word">
-    <p class="word-line add-one-line">
-      <span class="word">${wordHTML(word, m.total)}</span>
-      <span class="detail-word-actions">
-        <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-        <button class="add-one-btn" data-addone="${esc(word)}" type="button">+1</button>
-      </span>
-    </p>
-    <p class="word-phonetic" style="margin-top:2px;">${esc(phoneticOf(word))}</p>
-    ${senseLines(word).map((l) => `<p class="word-meaning">${esc(l)}</p>`).join("")}
-    <p class="word-meta">今日查询 ${m.today} 次 · 累计查询 ${m.total} 次</p>
-  </div>`;
-}
-
-function openFloatPanel() {
-  floatOpen = true;
-  sessionWord = null; // 新开面板 = 新会话
-  sessionConfirmed = null;
-  floatPanel.classList.add("open");
-  floatPanel.setAttribute("aria-hidden", "false");
-  floatResult.innerHTML = `<p class="float-result-empty">输入单词或短语…</p>`;
-  updateFloatClear();
-  setTimeout(() => floatInput.focus(), 220);
-}
-
-function closeFloatPanel() {
-  floatOpen = false;
-  sessionWord = null; // 面板关闭 = 会话结束
-  sessionConfirmed = null;
-  floatPanel.classList.remove("open");
-  floatPanel.setAttribute("aria-hidden", "true");
-  floatInput.value = "";
-  updateFloatClear();
-}
-
-$("#float-trigger").addEventListener("click", () => (floatOpen ? closeFloatPanel() : openFloatPanel()));
-$("#float-close").addEventListener("click", closeFloatPanel);
-/* 清空输入：只清空输入框并保持焦点，不关闭面板；触发 input 事件复用现有清空逻辑 */
-$("#float-clear").addEventListener("click", () => {
-  floatInput.value = "";
-  floatInput.dispatchEvent(new Event("input", { bubbles: true }));
-  floatInput.focus();
-  updateFloatClear();
-});
-
-floatInput.addEventListener("input", (e) => {
-  const v = e.target.value.trim().toLowerCase();
-  // 同 sheetInput：内容与已记录词不同 = 旧会话失效
-  if (v !== sessionWord) {
-    sessionWord = null;
-    sessionConfirmed = null;
-  }
-  // 输入即查：精确命中词典 → 记历史（不进生词本）
-  if (v && v !== sessionWord) {
-    const hit = dictGet(v);
-    if (hit) {
-      recordHistory(v);
-      sessionWord = v;
-      renderAll();
-    } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
-      dictGetAsync(v).then((d) => {
-        if (d && v !== sessionWord && floatInput.value.trim().toLowerCase() === v) {
-          recordHistory(v);
-          sessionWord = v;
-          renderAll();
-        }
-      });
-    }
-  }
-  const q = e.target.value.trim();
-  updateFloatClear();
-  if (!q) {
-    floatResult.innerHTML = `<p class="float-result-empty">输入单词或短语…</p>`;
-    return;
-  }
-  const exact = dictGet(q);
-  if (exact) renderFloatDetail(q);
-  else {
-    const matches = dictSearch(q, 4);
-    if (matches.length) {
-      floatResult.innerHTML = matches.map((w) => `<button class="float-hit" data-word="${esc(w)}" type="button">
-          <span class="row-main">
-            <span class="word">${esc(w)}</span>
-            <span class="float-hit-def">${esc(briefOf(w))}</span>
-          </span>
-          <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-        </button>`).join("");
-    } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
-      // 考研候选为空 → ECDICT 兜底（命中渲染详情，否则未收录）
-      dictGetAsync(v).then((d) => {
-        if (floatInput.value.trim().toLowerCase() !== v) return;
-        if (d) renderFloatDetail(v);
-        else floatResult.innerHTML = `<p class="float-result-empty">词典未收录「${esc(q)}」</p>`;
-      });
-      floatResult.innerHTML = `<p class="float-result-empty">正在查询词典…</p>`;
-    } else {
-      floatResult.innerHTML = `<p class="float-result-empty">词典未收录「${esc(q)}」</p>`;
-    }
-  }
-});
-
-floatInput.addEventListener("keydown", async (e) => {
-  if (e.key !== "Enter") return;
-  e.preventDefault();
-  const q = floatInput.value.trim().toLowerCase();
-  let target = dictGet(q) ? q : null;
-  if (!target) target = (await dictGetAsync(q)) ? q : null;
-  if (!target) target = dictSearch(q, 1)[0];
-  if (target) {
-    if (target !== sessionWord) { // 连续 Enter 不重复记录
-      recordHistory(target);
-      sessionWord = target;
-    }
-    if (target !== sessionConfirmed) { // 确认查询 → 今日生词计数
-      confirmQuery(target);
-      sessionConfirmed = target;
-    }
-    renderFloatDetail(target);
-    renderAll();
-  }
-});
-
-/* 悬浮条内候选点击 → 正式查询（stopPropagation 防止 document 层重复计数） */
-floatPanel.addEventListener("click", (e) => {
-  const hit = e.target.closest(".float-hit");
-  if (!hit) return;
-  e.stopPropagation();
-  const word = hit.dataset.word;
-  if (word !== sessionWord) { // 重复点击同一候选不重复记录
-    recordHistory(word);
-    sessionWord = word;
-  }
-  if (word !== sessionConfirmed) {
-    confirmQuery(word);
-    sessionConfirmed = word;
-  }
-  floatInput.value = word;
-  renderFloatDetail(word);
-  updateFloatClear();
-  renderAll();
-});
 
 /* ---------- 导出（内容：今日/历史生词 + 词典释义 + 查询次数） ---------- */
 
@@ -3007,7 +2832,6 @@ loadTasks(); // 待办任务 / 目标 / 奖励 / 打卡
 renderAll();
 
 applyTheme(localStorage.getItem("vc-theme") || "system", false);
-applyFloating(localStorage.getItem("vc-float") !== "0", false);
 initOverlay();
 
 /* 回到前台：检查跨天重置 + 重载记录（与后台悬浮查词互通）+ 悬浮查词授权结果 */

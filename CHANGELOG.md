@@ -1,5 +1,23 @@
 # 更新日志
 
+## v0.7.15（2026-08-17）
+- 删除软件内部悬浮查询条（首页已提供完整搜索面板 → 内部悬浮条重复且多余）：
+  - index.html：移除 #floating-widget DOM 与设置页「悬浮查词」开关
+  - app.js：移除 applyFloating、floatPanel/floatInput/floatResult/floatClear 常量、renderFloatDetail/openFloatPanel/closeFloatPanel/updateFloatClear 函数、相关事件监听器及 5 处引用（refreshFlow/switchTab/__back/Escape/focusin）
+  - style.css：清理 .floating-widget / .float-* 全套样式
+  - **保留** Android 外置 Overlay 后台悬浮查词（overlay.html + #overlay-item + #overlay-switch）
+- 重构查询记录 UI：
+  - 单词 → 释义 → 查询时间 三行纵排，全部左对齐，视觉层级递弱
+  - 查询时间左对齐至记录区域左边缘（不再缩进），紧凑单行，完整保留「YYYY/MM/DD HH:mm」
+  - 释义超出宽度时省略号截断；长单词自然换行
+  - 移除 history-dot 干扰元素；新增 ≤375px 小屏压缩规则
+- 修复 Review 首页「待复习数量」残留旧状态的真实 bug：
+  - 全部完成 Review 时，原代码 `clearReviewSession(); saveReviewSession();` 在清空后又把 phase:"done" 的会话写回 localStorage，导致 App 重启后再点 Review 入口仍会显示「今日复习完成」完成页，与首页「今日无需复习」状态不一致
+  - 修复：完成页仅 `clearReviewSession()`（不 save），会话彻底清除；首页数字始终实时取自 reviewQueue()，不维护独立状态
+- Review 数字同步全场景自动化验证（puppeteer 11 项断言全通过）：
+  - 完成归零 / 重进显示空状态 / 中途退出显示剩余 / 清空队列重建 / 删生词同步 / App 重启一致 / 跨业务日 nextAt 实时计算
+- 同步 android assets/www 副本；缓存戳 app.js?v=12 / style.css?v=8
+
 ## v0.7.14（2026-08-17）
 - Review 复习界面现代化重设计（沉浸式两阶段保留，仅优化表现层与交互层，未触动复习算法/记忆曲线/数据结构/本地存储）：
   - 顶部：极细进度条 + 轻量计数（"1 / 5"），半透明玻璃质感返回按钮悬浮于左上，隐藏"Review"标题与底部 TabBar/悬浮查词，形成独立学习空间
