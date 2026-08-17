@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#F7F7F8" />
   <title>VocabHit — 考研词汇查询</title>
-  <link rel="stylesheet" href="css/style.css?v=4" />
+  <link rel="stylesheet" href="css/style.css?v=7" />
 </head>
 <body>
 
@@ -231,7 +231,7 @@
           <div class="settings-item">
             <div class="settings-item-label">
               <span>版本</span>
-              <span class="settings-item-value">0.7.12</span>
+              <span class="settings-item-value">0.7.14</span>
             </div>
           </div>
         </div>
@@ -295,6 +295,11 @@
         <h1 class="page-title">Review</h1>
         <button class="page-header-action" id="review-clear" type="button" aria-label="清空复习队列">清空</button>
       </header>
+      <!-- 沉浸式顶部进度区：极细进度条 + 轻量计数（JS 控制显隐与宽度） -->
+      <div class="rv-topbar" id="rv-topbar" hidden>
+        <div class="rv-topbar-track"><div class="rv-topbar-fill" id="rv-topbar-fill"></div></div>
+        <p class="rv-topbar-count" id="rv-topbar-count"></p>
+      </div>
       <div class="review-body" id="review-body">
         <!-- JS 渲染：复习卡 / 详情 / 拼写 / 完成 -->
       </div>
@@ -422,6 +427,6 @@
 
   <script src="js/dict.js"></script>
   <script src="js/ecdict.js"></script>
-  <script src="js/app.js?v=9"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>

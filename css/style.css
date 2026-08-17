@@ -36,6 +36,10 @@
   --t-fast: 0.18s;
   --t-med: 0.28s;
 
+  /* Review 沉浸头部玻璃拟态（rgba 兜底，兼容旧 WebView 无 color-mix） */
+  --rv-glass: rgba(255, 255, 255, 0.62);
+  --rv-glass-active: rgba(235, 235, 238, 0.9);
+
   /* 安全区（Android 原生注入真实像素值，Web 下 env 兜底） */
   --sat: env(safe-area-inset-top, 0px);
   --sab: env(safe-area-inset-bottom, 0px);
@@ -57,6 +61,8 @@ html[data-theme="dark"] {
   --shadow-float: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.5));
   --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.45);
   --overlay: rgba(0, 0, 0, 0.5);
+  --rv-glass: rgba(28, 28, 30, 0.55);
+  --rv-glass-active: rgba(45, 45, 48, 0.85);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -75,6 +81,8 @@ html[data-theme="dark"] {
     --shadow-float: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.5));
     --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.45);
     --overlay: rgba(0, 0, 0, 0.5);
+    --rv-glass: rgba(28, 28, 30, 0.55);
+    --rv-glass-active: rgba(45, 45, 48, 0.85);
   }
 }
 
@@ -927,7 +935,13 @@ ul { list-style: none; }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-/* ---------- Review 复习 ---------- */
+/* ================================================================
+   Review 复习 — 沉浸式两阶段重设计
+   Phase 1: 词义复习（主动回忆）
+   Phase 2: 拼写复习（随机队列）
+   ================================================================ */
+
+/* --- Review 入口卡片（首页）--- */
 .review-entry {
   display: flex;
   align-items: center;
@@ -958,147 +972,755 @@ ul { list-style: none; }
 .review-entry-sub.muted { color: var(--text-3); }
 .review-entry-arrow { color: var(--text-3); }
 
-.review-body { padding-bottom: 24px; }
-.review-progress { font-size: 12.5px; color: var(--text-3); text-align: center; margin-bottom: 18px; font-variant-numeric: tabular-nums; }
+/* ================================================================
+   Review 沉浸模式：进入复习后全屏化（独立学习空间）
+   顶部 = 极细进度条 + 轻量计数；中部 = 单词舞台；底部 = 判断操作区
+   ================================================================ */
 
-/* 复习卡：一次一个单词 */
-.review-card {
-  padding: 40px 22px 26px;
+/* 隐藏底部导航、悬浮查词；Review 页铺满全屏（限 430 取景框，桌面预览居中） */
+body.review-active .tabbar { display: none; }
+body.review-active .floating-widget { display: none; }
+body.review-active #page-review {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  max-width: 430px;
+  margin: 0 auto;
+  background: var(--bg);
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+@media (min-width: 480px) {
+  body.review-active #page-review { box-shadow: 0 0 0 1px var(--hairline); }
+}
+
+/* 沉浸头部：仅保留悬浮返回按钮（左上），标题/清空隐藏 */
+body.review-active #page-review .page-header {
+  position: absolute;
+  top: calc(var(--sat) + 10px);
+  left: 16px;
+  right: 16px;
+  z-index: 30;
+  margin: 0;
+  background: transparent;
+  border-bottom: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+body.review-active #page-review .page-header .page-title,
+body.review-active #page-review .page-header-action { display: none; }
+body.review-active #page-review .back-btn {
+  pointer-events: auto;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--rv-glass);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--hairline);
+  color: var(--text-2);
+  box-shadow: none;
+  transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease);
+}
+body.review-active #page-review .back-btn:active {
+  background: var(--rv-glass-active);
+  transform: scale(0.9);
+}
+
+/* ---------- 顶部进度区（极细进度条 + 轻量计数，悬于内容之上） ---------- */
+.rv-topbar {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  z-index: 25;
+  padding-top: calc(var(--sat) + 8px);
+  pointer-events: none;
+}
+.rv-topbar[hidden] { display: none; }
+.rv-topbar-track {
+  height: 2px;
+  margin: 0 20px;
+  background: var(--hairline-strong);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.rv-topbar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 1px;
+  transition: width 0.45s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.rv-topbar-count {
+  margin-top: 7px;
   text-align: center;
-}
-.review-word { font-size: 38px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.2; word-break: break-all; }
-.review-hint { margin-top: 12px; font-size: 13.5px; color: var(--text-3); }
-.review-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 42px; }
-
-.review-btn {
-  width: 100%;
-  height: 52px;
-  border-radius: var(--r-btn);
-  border: none;
-  font-size: 16px;
+  font-size: 11.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  color: #fff;
-  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
-.review-btn:active { transform: scale(0.97); opacity: 0.88; }
-.review-known { background: #34C759; }
-.review-fuzzy { background: #FF9500; }
-.review-unknown { background: #FF3B30; }
 
-/* 答案详情 */
-.review-detail { padding: 6px 4px 26px; }
-.review-detail-word { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
-.review-detail-word sup { color: var(--accent); font-size: 0.55em; font-weight: 650; margin-left: 3px; }
-.review-detail-ph { margin-top: 6px; font-size: 14px; color: var(--text-2); }
-.review-detail-sense { margin-top: 12px; font-size: 15.5px; line-height: 1.55; }
-
-.review-stats { display: flex; gap: 10px; margin-top: 26px; }
-.review-stat {
+/* ---------- 复习内容容器 ---------- */
+#page-review .review-body {
   flex: 1;
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  padding: 12px 6px;
-  border-radius: 12px;
-  background: var(--surface-2);
-  font-size: 12.5px;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 屏幕切换动画：旧屏淡出 → 新屏淡入（轻微位移，节奏短促） */
+.rv-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rv-screen.rv-leave { animation: rvOut 0.12s ease both; }
+.rv-screen.rv-enter { animation: rvIn 0.3s cubic-bezier(0.32, 0.72, 0, 1) both; }
+@keyframes rvIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rvOut {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-8px); }
+}
+
+/* ================================================================
+   Phase 1: 词义复习 — 回忆页
+   核心：单词悬浮舞台中央，按钮置于底部，顶部零干扰
+   ================================================================ */
+.rv-meaning {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* 环境氛围光：极淡的紫色余晖，衬托「学习空间」感（非廉价大面积渐变） */
+.rv-meaning::before {
+  content: "";
+  position: absolute;
+  top: 5%;
+  left: 50%;
+  width: 440px;
+  height: 440px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--accent-soft), transparent 72%);
+  pointer-events: none;
+}
+
+/* 单词舞台：margin:auto 实现「有空间则居中、空间不足则可滚动」的健壮居中 */
+.rv-stage {
+  flex: none;
+  margin: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: calc(var(--sat) + 60px) 28px 16px;
+}
+
+.rv-word-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  max-width: 100%;
+}
+.rv-word {
+  font-size: 42px;
+  font-weight: 750;
+  letter-spacing: -0.035em;
+  line-height: 1.14;
+  color: var(--text);
+  text-align: center;
+  overflow-wrap: anywhere;
+  user-select: text;
+  transition: font-size 0.2s var(--ease);
+  white-space: nowrap; /* 默认单词单行；只有溢出才交给 overflow-wrap */
+  max-width: 100%;
+}
+.rv-word--lg { font-size: 35px; }  /* 13-15 字符 */
+.rv-word--md { font-size: 29px; }  /* 16-19 字符 */
+.rv-word--sm { font-size: 25px; }  /* 20+ 字符 */
+
+/* 扬声器：小型圆形图标按钮，与单词同行、紧随其后 */
+.rv-speaker {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) var(--ease);
+  touch-action: manipulation;
+}
+.rv-speaker:active { background: var(--surface-2); color: var(--text-2); transform: scale(0.88); }
+.rv-speaker svg { width: 19px; height: 19px; }
+.rv-speaker.rv-speaker-sm { width: 34px; height: 34px; }
+.rv-speaker.rv-speaker-sm svg { width: 17px; height: 17px; }
+.rv-speaker.pop { animation: speakerPop 0.42s var(--ease); }
+@keyframes speakerPop {
+  0% { transform: scale(1); }
+  32% { transform: scale(0.8); }
+  100% { transform: scale(1); }
+}
+
+/* 思考提示 + 极细引导线 */
+.rv-hint {
+  margin-top: 24px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
   color: var(--text-3);
 }
-.review-stat b { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.review-stat-known b { color: #34C759; }
-.review-stat-fuzzy b { color: #FF9500; }
-.review-stat-unknown b { color: #FF3B30; }
+.rv-think-track {
+  width: 132px;
+  height: 2px;
+  margin-top: 16px;
+  background: var(--hairline-strong);
+  border-radius: 1px;
+  overflow: hidden;
+}
+.rv-think-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.45;
+}
 
-.review-detail-actions { display: flex; align-items: center; gap: 12px; margin-top: 28px; }
-.review-wrong-btn {
+/* 判断操作区：三枚软色药丸按钮，等宽并排，克制且原生 */
+.rv-actions {
   flex: none;
-  height: 50px;
-  padding: 0 18px;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  padding: 26px 24px calc(var(--sab) + 30px);
+}
+.rv-btn {
+  position: relative;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 18px;
+  font-size: 16px;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease), background var(--t-fast) ease, opacity var(--t-fast) ease;
+}
+.rv-btn:active { transform: scale(0.95); }
+.rv-btn:disabled { opacity: 0.26; pointer-events: none; }
+
+.rv-btn-known { background: rgba(52, 199, 89, 0.13); color: #249A43; }
+.rv-btn-known:active { background: rgba(52, 199, 89, 0.22); }
+.rv-btn-fuzzy { background: rgba(255, 149, 0, 0.14); color: #C97A00; }
+.rv-btn-fuzzy:active { background: rgba(255, 149, 0, 0.24); }
+.rv-btn-unknown { background: rgba(255, 59, 48, 0.12); color: #C93026; }
+.rv-btn-unknown:active { background: rgba(255, 59, 48, 0.2); }
+
+html[data-theme="dark"] .rv-btn-known { color: #43D473; }
+html[data-theme="dark"] .rv-btn-fuzzy { color: #FFB340; }
+html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .rv-btn-known { color: #43D473; }
+  html[data-theme="system"] .rv-btn-fuzzy { color: #FFB340; }
+  html[data-theme="system"] .rv-btn-unknown { color: #FF6A61; }
+}
+
+/* ================================================================
+   Phase 1: 词义复习 — 释义确认页
+   单词头部 → 词性/释义列表（可滚动） → 底部操作
+   ================================================================ */
+.rv-detail {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--sat) + 70px) 26px 0;
+}
+.rv-detail-head {
+  position: relative;
+  flex: none;
+  padding-left: 20px; /* 为判断印记留出空间 */
+}
+/* 判断印记：短竖色条，克制的反馈 */
+.rv-detail-indicator {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 4px;
+  height: 30px;
+  border-radius: 2px;
+  animation: indicatorIn 0.3s var(--ease) forwards;
+}
+.rv-detail-indicator--known { background: #34C759; }
+.rv-detail-indicator--fuzzy { background: #FF9500; }
+.rv-detail-indicator--unknown { background: #FF3B30; }
+@keyframes indicatorIn {
+  from { opacity: 0; transform: scaleY(0); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+.rv-detail-word-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rv-detail-word {
+  font-size: 32px;
+  font-weight: 720;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.rv-detail-word.rv-word--lg { font-size: 27px; }
+.rv-detail-word.rv-word--md { font-size: 23px; }
+.rv-detail-word.rv-word--sm { font-size: 21px; }
+.rv-detail-ph {
+  margin-top: 7px;
+  font-size: 15px;
+  color: var(--text-2);
+  letter-spacing: 0.01em;
+}
+
+/* 释义列表：词性 chip + 释义文本，清晰层级，长释义自然换行 */
+.rv-detail-senses {
+  flex: 1;
+  min-height: 0;
+  margin-top: 26px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 10px;
+}
+.rv-sense {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+.rv-sense:last-child { border-bottom: none; }
+.rv-pos {
+  flex: none;
+  margin-top: 2px;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+.rv-sense-meaning {
+  min-width: 0;
+  flex: 1;
+  font-size: 16px;
+  line-height: 1.62;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+/* 释义页底部操作：记错了（幽灵） + 下一个（主操作） */
+.rv-detail-actions {
+  flex: none;
+  display: flex;
+  gap: 12px;
+  padding: 18px 0 calc(var(--sab) + 30px);
+}
+.rv-btn-wrong {
+  flex: none;
+  height: 52px;
+  padding: 0 22px;
   border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-btn);
+  border-radius: 16px;
   background: transparent;
   color: var(--text-2);
   font-size: 14.5px;
-  font-weight: 550;
-  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+  font-weight: 560;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, border-color var(--t-fast) ease, transform var(--t-fast) var(--ease);
 }
-.review-wrong-btn:active { background: var(--surface-2); color: var(--text); }
-/* 下一步：低调克制的灰色系按钮（精致、圆角、点击区域大） */
-.review-next-btn {
+.rv-btn-wrong:active { background: var(--surface-2); color: var(--text); transform: scale(0.97); }
+.rv-btn-next {
   flex: 1;
-  height: 50px;
+  height: 52px;
   border: none;
-  border-radius: var(--r-btn);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease);
+  border-radius: 16px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 15.5px;
+  font-weight: 620;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
 }
-.review-next-btn:active { background: var(--hairline-strong); transform: scale(0.98); }
+.rv-btn-next:active { opacity: 0.86; transform: scale(0.98); }
 
-/* 完成页 */
-.review-done { padding: 56px 22px 30px; text-align: center; }
-.review-done-check {
-  width: 64px; height: 64px;
-  margin: 0 auto;
-  display: flex; align-items: center; justify-content: center;
+/* ================================================================
+   阶段过渡页（词义完成 / 清空确认）
+   ================================================================ */
+.rv-transition {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(var(--sat) + 40px) 32px calc(var(--sab) + 40px);
+  text-align: center;
+}
+.rv-transition-icon {
+  width: 52px;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 30px; font-weight: 700;
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 22px;
 }
-.review-done-title { margin-top: 20px; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
-.review-done-sub { margin-top: 8px; font-size: 14px; color: var(--text-2); }
-.review-done .review-stats { margin-top: 26px; }
-.review-done-hint { margin-top: 18px; font-size: 13px; color: var(--text-3); }
-.review-done .primary-btn { margin-top: 34px; }
+.rv-transition-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.rv-transition-sub {
+  font-size: 14.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+  margin-bottom: 34px;
+}
+/* 统计：纯文字三列 + 细分隔线，无卡片堆叠 */
+.rv-transition-stats {
+  display: flex;
+  margin-bottom: 38px;
+}
+.rv-transition-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px;
+  border-left: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.rv-transition-stat:first-child { border-left: none; }
+.rv-transition-stat b {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.rv-transition-stat--known b { color: #34C759; }
+.rv-transition-stat--fuzzy b { color: #FF9500; }
+.rv-transition-stat--unknown b { color: #FF3B30; }
+.rv-transition-stat span {
+  font-size: 12px;
+  color: var(--text-3);
+}
 
-/* 拼写训练（底部 padding 随输入法高度上移，确保输入框/结果/下一步按钮不被键盘遮挡） */
-.review-spell { padding: 26px 4px calc(var(--ime, 0px) + 24px); }
-.spell-hint { font-size: 13px; color: var(--text-3); text-align: center; }
-.spell-def {
-  margin-top: 14px;
-  font-size: 17px;
-  font-weight: 560;
+/* 主 CTA（开始拼写 / 完成返回 / 清空确认） */
+.rv-btn-go {
+  width: 100%;
+  max-width: 280px;
+  height: 54px;
+  border: none;
+  border-radius: 18px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 620;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+}
+.rv-btn-go:active { transform: scale(0.97); opacity: 0.88; }
+/* 清空确认：与幽灵按钮并排时等高适配 */
+.rv-detail-actions .rv-btn-go { height: 52px; flex: 1; max-width: none; }
+
+/* ================================================================
+   Phase 2: 拼写复习
+   ================================================================ */
+.rv-spell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.rv-spell .rv-stage {
+  padding-bottom: 6px;
+}
+.rv-spell-label {
+  font-size: 12px;
+  color: var(--text-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+.rv-spell-def {
+  margin-top: 18px;
+  font-size: 19px;
+  font-weight: 580;
   color: var(--text);
   text-align: center;
-  line-height: 1.55;
+  line-height: 1.62;
+  max-width: 320px;
+  overflow-wrap: anywhere;
 }
-.spell-input {
+.rv-spell-input {
   width: 100%;
-  margin-top: 28px;
-  padding: 14px 16px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-field);
+  max-width: 300px;
+  margin-top: 30px;
+  padding: 14px 18px;
+  border: 1.5px solid var(--hairline-strong);
+  border-radius: 18px;
   background: var(--surface);
   color: var(--text);
-  font-size: 18px;
-  font-weight: 600;
+  font-size: 21px;
+  font-weight: 620;
   text-align: center;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.09em;
   outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.spell-input:focus { border-color: var(--accent); }
-/* 确认 + 下一个：同一行紧凑排列，输入法弹出时由 .review-spell 的 --ime 底部留白避让 */
-.spell-actions {
+.rv-spell-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.rv-spell-input.error { border-color: #FF3B30; animation: rvShake 0.4s ease; }
+.rv-spell-input.success { border-color: #34C759; }
+@keyframes rvShake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  55% { transform: translateX(5px); }
+  80% { transform: translateX(-3px); }
+}
+
+.rv-spell-result {
+  margin-top: 26px;
+  text-align: center;
+  width: 100%;
+  max-width: 300px;
+}
+.rv-spell-result-word {
+  font-size: 31px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  animation: rvPop 0.35s var(--ease);
+  overflow-wrap: anywhere;
+}
+.rv-spell-result-word.correct { color: #34C759; }
+.rv-spell-result-word.wrong { color: #FF3B30; }
+.rv-spell-result-tip {
+  margin-top: 8px;
+  font-size: 14px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+@keyframes rvPop {
+  from { transform: scale(0.82); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* 拼写底部操作（IME 打开时让出输入法高度） */
+.rv-spell-actions {
+  flex: none;
+  width: 100%;
   display: flex;
   gap: 12px;
-  margin-top: 14px;
+  padding: 20px 24px calc(var(--ime, 0px) + var(--sab) + 30px);
 }
-.spell-submit { flex: 1; min-width: 0; }
-.spell-next {
+.rv-spell-actions .rv-btn-next { max-width: 300px; margin: 0 auto; }
+
+/* ================================================================
+   完成页 / 空状态
+   ================================================================ */
+.rv-done {
   flex: 1;
-  min-width: 0;
-  background: var(--surface-2);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(var(--sat) + 40px) 28px calc(var(--sab) + 40px);
+  text-align: center;
+}
+.rv-done-check {
+  width: 62px;
+  height: 62px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(52, 199, 89, 0.1);
+  color: #34C759;
+  font-size: 28px;
+  font-weight: 700;
+  animation: rvPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.rv-done-title {
+  margin-top: 22px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.rv-done-sub {
+  margin-top: 7px;
+  font-size: 14.5px;
   color: var(--text-2);
 }
-.spell-result { margin-top: 22px; text-align: center; }
-.spell-word { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; }
-.spell-correct { color: #34C759; }
-.spell-wrong { color: #FF3B30; }
-.spell-tip { margin-top: 8px; font-size: 14px; color: var(--text-2); }
 
+.rv-done-stats-block {
+  width: 100%;
+  max-width: 300px;
+  margin-top: 28px;
+}
+.rv-done-section-title {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-3);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.rv-done-stats {
+  display: flex;
+}
+.rv-done-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-left: 1px solid var(--hairline);
+  white-space: nowrap;
+}
+.rv-done-stat:first-child { border-left: none; }
+.rv-done-stat b {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.rv-done-stat--known b { color: #34C759; }
+.rv-done-stat--fuzzy b { color: #FF9500; }
+.rv-done-stat--unknown b { color: #FF3B30; }
+.rv-done-stat--correct b { color: #34C759; }
+.rv-done-stat--wrong b { color: #FF3B30; }
+.rv-done-stat span {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.rv-done-hint {
+  margin-top: 22px;
+  font-size: 13px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+.rv-done .rv-btn-go {
+  margin-top: 28px;
+  max-width: 260px;
+}
+
+/* ================================================================
+   响应式适配
+   ================================================================ */
+
+/* 小屏手机（< 375px）：压缩字号与控件，保证单词+扬声器单行可读 */
+@media (max-width: 374px) {
+  .rv-word { font-size: 36px; }
+  .rv-word--lg { font-size: 30px; }
+  .rv-word--md { font-size: 26px; }
+  .rv-word--sm { font-size: 22px; }
+  .rv-detail-word { font-size: 28px; }
+  .rv-detail-word.rv-word--lg { font-size: 24px; }
+  .rv-detail-word.rv-word--md { font-size: 22px; }
+  .rv-detail-word.rv-word--sm { font-size: 20px; }
+  .rv-actions { padding-left: 16px; padding-right: 16px; gap: 8px; }
+  .rv-btn { height: 50px; font-size: 15px; border-radius: 15px; }
+  .rv-detail { padding-left: 22px; padding-right: 22px; }
+  .rv-detail-actions { gap: 10px; }
+  .rv-spell-actions { padding-left: 16px; padding-right: 16px; }
+  .rv-word-row { gap: 10px; }
+  .rv-speaker { width: 34px; height: 34px; }
+  .rv-speaker svg { width: 17px; height: 17px; }
+  .rv-hint { font-size: 12.5px; margin-top: 18px; }
+  .rv-think-track { width: 110px; }
+}
+
+/* 横屏 / 矮视口：允许整页滚动，压缩垂直留白，防止内容挤压 */
+@media (max-height: 600px) {
+  body.review-active #page-review { overflow-y: auto; }
+  .rv-meaning { overflow-y: auto; }
+  .rv-stage {
+    justify-content: flex-start;
+    padding-top: calc(var(--sat) + 54px);
+    padding-bottom: 12px;
+  }
+  .rv-word { font-size: 34px; }
+  .rv-word--lg { font-size: 29px; }
+  .rv-word--md { font-size: 25px; }
+  .rv-word--sm { font-size: 21px; }
+  .rv-hint { margin-top: 14px; }
+  .rv-think-track { margin-top: 12px; }
+  .rv-actions { padding-top: 16px; padding-bottom: calc(var(--sab) + 18px); }
+  .rv-btn { height: 50px; }
+  .rv-detail { padding-top: calc(var(--sat) + 56px); }
+  .rv-detail-senses { margin-top: 16px; }
+  .rv-detail-actions { padding-bottom: calc(var(--sab) + 18px); }
+  .rv-transition, .rv-done { justify-content: flex-start; padding-top: calc(var(--sat) + 52px); }
+}
+
+/* 动效偏好：关闭全部复习动画 */
+@media (prefers-reduced-motion: reduce) {
+  .rv-screen.rv-leave,
+  .rv-screen.rv-enter,
+  .rv-speaker.pop,
+  .rv-detail-indicator,
+  .rv-spell-result-word,
+  .rv-done-check { animation: none; }
+  .rv-think-fill { transition: none; }
+  .rv-topbar-fill { transition: none; }
+}
 /* ---------- 番茄钟 ---------- */
 .pomo-entry-icon { background: rgba(255, 149, 0, 0.13); color: #FF9500; }
 
@@ -1156,7 +1778,7 @@ ul { list-style: none; }
 .pomo-full {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: 85; /* 高于 tabbar(70)：全屏运行时底部导航不可见不可点（同 70 时 tabbar 因 DOM 靠后反而盖在上面）；低于 sheet(90)/toast(100) */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1538,4 +2160,29 @@ ul { list-style: none; }
   color: var(--accent);
   font-size: 12.5px; font-weight: 600;
   white-space: nowrap;
+}
+
+/* ============================================================
+   微交互（克制、短促，仅服务操作反馈与信息表达）
+   ============================================================ */
+/* 首页统计数字：值变化时轻弹一次 */
+.stat-num.bump { animation: statBump 0.4s var(--ease); }
+@keyframes statBump {
+  0% { transform: translateY(0) scale(1); }
+  45% { transform: translateY(-2px) scale(1.14); }
+  100% { transform: translateY(0) scale(1); }
+}
+
+/* 任务勾选：✓ 轻弹（仅本次勾选的那一项，取消勾选不动画） */
+.task-check.just-checked { animation: checkPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes checkPop {
+  0% { transform: scale(0.55); }
+  60% { transform: scale(1.12); }
+  100% { transform: scale(1); }
+}
+
+/* 系统关闭动画偏好：全部微交互降级为无动画 */
+@media (prefers-reduced-motion: reduce) {
+  .stat-num.bump,
+  .task-check.just-checked { animation: none; }
 }

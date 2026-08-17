@@ -86,6 +86,7 @@ function phoneticOf(word) {
 /* ---------- 生词记录系统（词典管释义，记录管次数） ---------- */
 
 const STORE_KEY = "vc-records";
+const HISTORY_MAX = 500; // 查询记录页渲染上限（数据永久保存，仅限制单次渲染节点数）
 let records = { day: "", history: [], words: {} };
 
 /** 词汇日：04:00 前算前一天（每日重置 04:00） */
@@ -577,234 +578,540 @@ function answerReview(word, result) {
   return st;
 }
 
-/* ---------- Review 页面与交互（可中断、可恢复） ---------- */
+/* ============================================================
+   Review 复习 — 两阶段沉浸式重设计
+   Phase 1: 词义复习（主动回忆）→ Phase 2: 拼写复习（随机队列）
+   ============================================================ */
 
-const REVIEW_SESSION_KEY = "vc-review-session";
+const REVIEW_SESSION_KEY = "vc-review-session-v2";
+
+// 新会话状态结构
 let reviewSession = {
-  day: "", queue: [], idx: 0, current: null,
-  step: "answer",       // answer 识别 | detail 释义确认 | spell 拼写 | done
-  lastResult: null,     // 当前单词本次的记忆判断（known/fuzzy/unknown）
-  snapshot: null,       // 本次判断前的状态快照（「记错了」回滚用）
-  spell: { submitted: false, correct: false, input: "" }, // 当前拼写状态
-  stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },        // 本次会话统计
+  day: "",
+  phase: "meaning",     // "meaning" | "transition" | "spell" | "done"
+  // Phase 1
+  queue: [],            // 原始队列顺序
+  idx: 0,
+  step: "answer",       // "answer" | "detail"
+  current: null,
+  lastResult: null,
+  snapshot: null,
+  stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
+  // Phase 2
+  spellQueue: [],       // 随机打乱后的拼写队列
+  spellIdx: 0,
+  spell: { submitted: false, correct: false, input: "" },
+  spellStats: { correct: 0, wrong: 0, skipped: 0 },
 };
 
 function saveReviewSession() {
-  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify(reviewSession)); } catch (_) { /* 存储满时忽略 */ }
+  try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify(reviewSession)); } catch (_) {}
 }
 
 function clearReviewSession() {
   try { localStorage.removeItem(REVIEW_SESSION_KEY); } catch (_) {}
 }
 
-/** 读取未完成的今日会话（跨天 / 已完成 / 无会话 → null）。
-    恢复前过滤：生词本已删除（或已移出生词本）的词从会话队列同步移除，保证与生词本一致 */
+/** Fisher-Yates 随机打乱数组（返回新数组）*/
+function shuffleArray(arr) {
+  const result = arr.slice();
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+/** 读取并恢复会话 */
 function loadReviewSession() {
   try {
     const s = JSON.parse(localStorage.getItem(REVIEW_SESSION_KEY) || "null");
     if (s && s.day === vocabDay() && Array.isArray(s.queue) && s.queue.length > 0) {
-      s.queue = s.queue.filter((w) => reviewStore.words[w] && isStarred(w)); // 与生词本同步
-      s.idx = Math.min(s.idx, s.queue.length);
-      if (s.idx >= s.queue.length) return null; // 全部词已失效 → 重新生成
+      // 与生词本同步：过滤掉已删除的词
+      s.queue = s.queue.filter((w) => reviewStore.words[w] && isStarred(w));
+      if (s.queue.length === 0) return null;
+      
+      // Phase 1 恢复
+      s.idx = Math.min(s.idx || 0, s.queue.length);
       if (!s.stats) s.stats = { n: 0, known: 0, fuzzy: 0, unknown: 0 };
-      if (!s.spell) s.spell = { submitted: false, correct: false, input: "" };
+      
+      // Phase 2 恢复（如果已进入拼写阶段）
+      if (s.phase === "spell" || s.phase === "done") {
+        if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
+          s.spellQueue = shuffleArray(s.queue);
+        }
+        s.spellQueue = s.spellQueue.filter((w) => reviewStore.words[w] && isStarred(w));
+        s.spellIdx = Math.min(s.spellIdx || 0, s.spellQueue.length);
+        if (!s.spellStats) s.spellStats = { correct: 0, wrong: 0, skipped: 0 };
+        if (!s.spell) s.spell = { submitted: false, correct: false, input: "" };
+      }
+      
       return s;
     }
   } catch (_) {}
   return null;
 }
 
+/** 打开 Review 入口 */
 function openReview() {
   rolloverIfNeeded();
-  renderAll(); // 刷新首页（含 Review 计数）
+  renderAll();
   const saved = loadReviewSession();
+  
   if (saved) {
-    reviewSession = saved; // 恢复中断会话，不重新判定记忆状态
+    reviewSession = saved;
   } else {
+    const queue = reviewQueue();
+    if (queue.length === 0) {
+      // 无待复习单词，显示空状态
+      switchTab("review");
+      rvHideProgress();
+      $("#review-body").innerHTML = `<div class="rv-done rv-screen">
+        <div class="rv-done-check">✓</div>
+        <h2 class="rv-done-title">今日无需复习</h2>
+        <p class="rv-done-sub">没有待复习的单词</p>
+        <p class="rv-done-hint">继续学习新单词，积累复习任务</p>
+        <button class="rv-btn-go" id="review-done-back" type="button">返回首页</button>
+      </div>`;
+      return;
+    }
+    
     reviewSession = {
-      day: vocabDay(), queue: reviewQueue(), idx: 0, current: null,
-      step: "answer", lastResult: null, snapshot: null,
-      spell: { submitted: false, correct: false, input: "" },
+      day: vocabDay(),
+      phase: "meaning",
+      queue: queue,
+      idx: 0,
+      step: "answer",
+      current: null,
+      lastResult: null,
+      snapshot: null,
       stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
+      spellQueue: [],
+      spellIdx: 0,
+      spell: { submitted: false, correct: false, input: "" },
+      spellStats: { correct: 0, wrong: 0, skipped: 0 },
     };
     saveReviewSession();
   }
+  
+  // 进入沉浸模式
+  document.body.classList.add("review-active");
   switchTab("review");
-  renderReviewByStep();
+  renderReviewByPhase();
 }
 
-/** 按会话步骤渲染（支持恢复到识别/释义确认/拼写任意阶段） */
-function renderReviewByStep() {
-  if (reviewSession.idx >= reviewSession.queue.length) return renderReviewDone($("#review-body"));
-  reviewSession.current = reviewSession.queue[reviewSession.idx];
-  if (reviewSession.step === "spell") return renderReviewSpell(reviewSession.current);
-  if (reviewSession.step === "detail") return renderReviewDetail(reviewSession.current);
-  renderReviewCard($("#review-body"));
+/** 按阶段渲染（统一经 rvRender 做轻量切换动画） */
+function renderReviewByPhase() {
+  const body = $("#review-body");
+  
+  if (reviewSession.phase === "meaning") {
+    if (reviewSession.idx >= reviewSession.queue.length) {
+      // Phase 1 完成，进入过渡页
+      reviewSession.phase = "transition";
+      saveReviewSession();
+      return rvRender(() => renderTransition(body));
+    }
+    reviewSession.current = reviewSession.queue[reviewSession.idx];
+    if (reviewSession.step === "detail") {
+      return rvRender(() => renderDetail(body));
+    }
+    return rvRender(() => renderMeaning(body));
+  }
+  
+  if (reviewSession.phase === "spell") {
+    if (reviewSession.spellIdx >= reviewSession.spellQueue.length) {
+      // Phase 2 完成
+      reviewSession.phase = "done";
+      clearReviewSession();
+      saveReviewSession();
+      return rvRender(() => renderDone(body));
+    }
+    reviewSession.current = reviewSession.spellQueue[reviewSession.spellIdx];
+    return rvRender(() => renderSpell(body));
+  }
+  
+  if (reviewSession.phase === "done") {
+    return rvRender(() => renderDone(body));
+  }
+  
+  if (reviewSession.phase === "transition") {
+    return rvRender(() => renderTransition(body));
+  }
 }
 
-function renderReviewCard(body) {
+/* ============================================================
+   Review 表现层助手（纯 UI：进度 / 切换动画 / 字号分级 / 释义行）
+   不触碰任何业务状态、算法与存储
+   ============================================================ */
+
+/** 顶部进度区：显示 cur/total，细进度条平滑填充 */
+function rvSetProgress(cur, total) {
+  const wrap = $("#rv-topbar");
+  const bar = $("#rv-topbar-fill");
+  const txt = $("#rv-topbar-count");
+  if (!wrap || !bar || !txt) return;
+  wrap.hidden = false;
+  const pct = total > 0 ? Math.min(100, Math.round((cur / total) * 100)) : 0;
+  bar.style.width = pct + "%";
+  txt.textContent = `${cur} / ${total}`;
+}
+
+/** 隐藏顶部进度区（过渡页 / 完成页 / 空状态不使用进度） */
+function rvHideProgress() {
+  const wrap = $("#rv-topbar");
+  if (wrap) wrap.hidden = true;
+}
+
+/** 长单词字号分级：<=12 默认 / 13-15 lg / 16-19 md / 20+ sm */
+function rvWordSizeClass(word) {
+  const n = String(word).length;
+  if (n >= 20) return "rv-word--sm";
+  if (n >= 16) return "rv-word--md";
+  if (n >= 13) return "rv-word--lg";
+  return "";
+}
+
+/** 释义行解析：["adj. 临时的；暂时的"] → [{pos:"adj.", meaning:"临时的；暂时的"}] */
+function rvSenseRows(word) {
+  return senseLines(word).map((line) => {
+    const m = line.match(/^([^\s\u4e00-\u9fa5]{1,8}?)\s+(.*)$/);
+    if (m && m[2]) return { pos: m[1].trim(), meaning: m[2].trim() };
+    return { pos: "", meaning: line.trim() };
+  });
+}
+
+/** 屏幕切换动画：旧屏淡出 → 新屏淡入（轻微位移，节奏短促；表现层） */
+let rvAnimating = false;
+function rvRender(fn) {
+  const body = $("#review-body");
+  if (!body || rvAnimating) { fn(); return; }
+  const reduced = typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const leaveMs = reduced ? 0 : 110;
+  rvAnimating = true;
+  const finish = () => {
+    fn();
+    const next = body.firstElementChild;
+    if (next) {
+      next.classList.add("rv-enter");
+      requestAnimationFrame(() => requestAnimationFrame(() => next.classList.remove("rv-enter")));
+    }
+    rvAnimating = false;
+  };
+  const cur = body.firstElementChild;
+  if (cur) {
+    cur.classList.add("rv-leave");
+    setTimeout(finish, leaveMs);
+  } else {
+    finish();
+  }
+}
+
+/** Phase 1: 词义复习 - 回忆页（单词舞台中央，顶部进度，底部判断区） */
+function renderMeaning(body) {
   const word = reviewSession.current;
   const total = reviewSession.queue.length;
-  body.innerHTML = `<div class="review-card">
-    <p class="review-progress">${reviewSession.idx + 1} / ${total}</p>
-    <p class="review-word-row">
-      <span class="review-word">${esc(word)}</span>
-      <span class="speaker-btn review-word-speaker" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-    </p>
-    <p class="review-hint">想想它的意思，然后如实判断</p>
-    <div class="review-actions">
-      <button class="review-btn review-known" data-result="known" type="button">认识</button>
-      <button class="review-btn review-fuzzy" data-result="fuzzy" type="button">模糊</button>
-      <button class="review-btn review-unknown" data-result="unknown" type="button">不认识</button>
+  
+  rvSetProgress(reviewSession.idx + 1, total);
+  
+  body.innerHTML = `<div class="rv-meaning rv-screen">
+    <div class="rv-stage">
+      <div class="rv-word-row">
+        <h2 class="rv-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
+        <button class="rv-speaker" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
+      </div>
+      <p class="rv-hint">回想它的意思，然后如实判断</p>
+      <div class="rv-think-track"><div class="rv-think-fill" id="rv-think-fill"></div></div>
+    </div>
+    <div class="rv-actions">
+      <button class="rv-btn rv-btn-known" data-result="known" type="button" disabled>认识</button>
+      <button class="rv-btn rv-btn-fuzzy" data-result="fuzzy" type="button" disabled>模糊</button>
+      <button class="rv-btn rv-btn-unknown" data-result="unknown" type="button" disabled>不认识</button>
     </div>
   </div>`;
-  ttsSpeak(word, 2); // Review 判断页自动播放读音 2 次（纯辅助，不影响判断流程与数据）
+  
+  // 思考引导动画（3 秒）：细线填充 + 按钮解锁
+  setTimeout(() => {
+    const fill = $("#rv-think-fill");
+    if (fill) {
+      fill.style.width = "100%";
+      fill.style.transition = "width 3s linear";
+    }
+    // 3 秒后启用按钮
+    setTimeout(() => {
+      $$(".rv-actions .rv-btn").forEach(btn => btn.disabled = false);
+    }, 100);
+  }, 50);
+  
+  // TTS 不自动播放，用户手动点击
 }
 
+/** Phase 1: 词义复习 - 释义确认页（单词头部 → 词性/释义列表 → 底部操作） */
+function renderDetail(body) {
+  const word = reviewSession.current;
+  const total = reviewSession.queue.length;
+  const last = reviewSession.lastResult;
+  
+  // 判断印记颜色
+  const indicatorClass = last === "known" ? "rv-detail-indicator--known" 
+                       : last === "fuzzy" ? "rv-detail-indicator--fuzzy" 
+                       : "rv-detail-indicator--unknown";
+  
+  const senses = rvSenseRows(word);
+  const sensesHtml = senses.length
+    ? senses.map((s) => `<div class="rv-sense">${s.pos ? `<span class="rv-pos">${esc(s.pos)}</span>` : ""}<p class="rv-sense-meaning">${esc(s.meaning)}</p></div>`).join("")
+    : `<div class="rv-sense"><p class="rv-sense-meaning" style="color:var(--text-2);">暂无释义</p></div>`;
+  
+  rvSetProgress(reviewSession.idx + 1, total);
+  
+  body.innerHTML = `<div class="rv-detail rv-screen">
+    <div class="rv-detail-head">
+      <div class="rv-detail-indicator ${indicatorClass}"></div>
+      <div class="rv-detail-word-row">
+        <h2 class="rv-detail-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
+        <button class="rv-speaker rv-speaker-sm" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
+      </div>
+      <p class="rv-detail-ph">${esc(phoneticOf(word))}</p>
+    </div>
+    <div class="rv-detail-senses">
+      ${sensesHtml}
+    </div>
+    <div class="rv-detail-actions">
+      <button class="rv-btn-wrong" id="review-wrong" type="button">记错了</button>
+      <button class="rv-btn-next" id="review-next" type="button">下一个</button>
+    </div>
+  </div>`;
+  
+  // 自动播放 TTS 一次（帮助音义绑定）
+  setTimeout(() => ttsSpeak(word, 1), 200);
+}
+
+/** 阶段过渡页 */
+function renderTransition(body) {
+  const s = reviewSession.stats;
+  const total = reviewSession.queue.length;
+  
+  rvHideProgress();
+  
+  body.innerHTML = `<div class="rv-transition rv-screen">
+    <div class="rv-transition-icon">✓</div>
+    <h2 class="rv-transition-title">词义复习完成</h2>
+    <p class="rv-transition-sub">已完成 ${total} 个单词的词义复习<br>接下来进行拼写复习</p>
+    <div class="rv-transition-stats">
+      <div class="rv-transition-stat rv-transition-stat--known">
+        <b>${s.known}</b><span>认识</span>
+      </div>
+      <div class="rv-transition-stat rv-transition-stat--fuzzy">
+        <b>${s.fuzzy}</b><span>模糊</span>
+      </div>
+      <div class="rv-transition-stat rv-transition-stat--unknown">
+        <b>${s.unknown}</b><span>不认识</span>
+      </div>
+    </div>
+    <button class="rv-btn-go" id="rv-go-spell" type="button">开始拼写复习</button>
+  </div>`;
+}
+
+/** Phase 2: 拼写复习 */
+function renderSpell(body) {
+  const word = reviewSession.current;
+  const total = reviewSession.spellQueue.length;
+  const sp = reviewSession.spell;
+  const defHint = (senseLines(word)[0] || briefOf(word)) || "根据释义拼写单词";
+  
+  rvSetProgress(reviewSession.spellIdx + 1, total);
+  
+  const inputClass = sp.submitted && !sp.correct ? "error"
+                   : sp.submitted && sp.correct ? "success" : "";
+  // 状态化按钮组：未提交 [跳过+确认]；错误 [跳过+重新提交]；正确 [下一个]
+  const actionsHtml = sp.submitted && sp.correct
+    ? `<button class="rv-btn-next" id="spell-next" type="button">下一个</button>`
+    : `<button class="rv-btn-wrong" id="spell-skip" type="button">跳过</button>
+       <button class="rv-btn-next" id="spell-submit" type="button">${sp.submitted && !sp.correct ? "重新提交" : "确认"}</button>`;
+  
+  body.innerHTML = `<div class="rv-spell rv-screen">
+    <div class="rv-stage">
+      <p class="rv-spell-label">拼写复习</p>
+      <button class="rv-speaker rv-speaker-sm" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
+      <p class="rv-spell-def">${esc(defHint)}</p>
+      <input class="rv-spell-input ${inputClass}" 
+             id="spell-input" 
+             type="text" 
+             placeholder="输入英文单词" 
+             autocomplete="off" 
+             autocapitalize="off" 
+             spellcheck="false" 
+             value="${esc(sp.input)}" />
+      ${sp.submitted ? `<div class="rv-spell-result">
+        <div class="rv-spell-result-word ${sp.correct ? 'correct' : 'wrong'}">${esc(word)}</div>
+        <p class="rv-spell-result-tip">${sp.correct ? "拼写正确" : "正确拼写如上 · 请重新输入"}</p>
+      </div>` : ""}
+    </div>
+    <div class="rv-spell-actions">
+      ${actionsHtml}
+    </div>
+  </div>`;
+  
+  const input = $("#spell-input");
+  if (input) {
+    input.addEventListener("input", () => {
+      reviewSession.spell.input = input.value;
+      saveReviewSession();
+      // 移除错误样式
+      input.classList.remove("error");
+    });
+    setTimeout(() => {
+      input.focus();
+      if (sp.submitted && !sp.correct) {
+        input.select();
+      }
+    }, 60);
+  }
+}
+
+/** 完成页 */
+function renderDone(body) {
+  const s = reviewSession.stats;
+  const sp = reviewSession.spellStats;
+  const total = reviewSession.queue.length;
+  
+  rvHideProgress();
+  
+  body.innerHTML = `<div class="rv-done rv-screen">
+    <div class="rv-done-check">✓</div>
+    <h2 class="rv-done-title">今日复习完成</h2>
+    <p class="rv-done-sub">共复习 ${total} 个单词</p>
+    
+    <div class="rv-done-stats-block">
+      <p class="rv-done-section-title">词义复习</p>
+      <div class="rv-done-stats">
+        <div class="rv-done-stat rv-done-stat--known">
+          <b>${s.known}</b><span>认识</span>
+        </div>
+        <div class="rv-done-stat rv-done-stat--fuzzy">
+          <b>${s.fuzzy}</b><span>模糊</span>
+        </div>
+        <div class="rv-done-stat rv-done-stat--unknown">
+          <b>${s.unknown}</b><span>不认识</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="rv-done-stats-block">
+      <p class="rv-done-section-title">拼写复习</p>
+      <div class="rv-done-stats">
+        <div class="rv-done-stat rv-done-stat--correct">
+          <b>${sp.correct}</b><span>正确</span>
+        </div>
+        <div class="rv-done-stat rv-done-stat--wrong">
+          <b>${sp.wrong + sp.skipped}</b><span>需强化</span>
+        </div>
+      </div>
+    </div>
+    
+    <p class="rv-done-hint">坚持就是胜利！</p>
+    <button class="rv-btn-go" id="review-done-back" type="button">返回首页</button>
+  </div>`;
+}
+
+/** 用户点击判断按钮 */
 function onReviewAnswer(result) {
   const word = reviewSession.current;
-  ttsStop(); // 离开判断页，停止播放
   const st = reviewStore.words[word];
-  reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null; // 记错了回滚依据
-  answerReview(word, result); // 记忆曲线按本次判断处理
+  
+  // 记录快照用于回滚
+  reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null;
+  
+  // 调用记忆曲线算法
+  answerReview(word, result);
+  
+  // 更新会话状态
   reviewSession.lastResult = result;
   reviewSession.step = "detail";
   reviewSession.stats.n += 1;
   reviewSession.stats[result] += 1;
   saveReviewSession();
-  renderReviewDetail(word);
+  
+  rvRender(() => renderDetail($("#review-body")));
 }
 
-function renderReviewDetail(word) {
-  const m = wordMeta(word);
-  const st = reviewStore.words[word];
-  const total = reviewSession.queue.length;
-  const body = $("#review-body");
-  body.innerHTML = `<div class="review-detail">
-    <p class="review-progress">${reviewSession.idx + 1} / ${total}</p>
-    <p class="review-detail-word">
-      <span class="word">${wordHTML(word, m.total)}</span>
-      <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-    </p>
-    <p class="review-detail-ph">${esc(phoneticOf(word))}</p>
-    ${senseLines(word).map((l) => `<p class="review-detail-sense">${esc(l)}</p>`).join("")}
-    <div class="review-stats">
-      <span class="review-stat review-stat-known"><b>${st.known}</b> 认识</span>
-      <span class="review-stat review-stat-fuzzy"><b>${st.fuzzy}</b> 模糊</span>
-      <span class="review-stat review-stat-unknown"><b>${st.unknown}</b> 不认识</span>
-    </div>
-    <div class="review-detail-actions">
-      <button class="review-wrong-btn" id="review-wrong" type="button">记错了</button>
-      <button class="review-next-btn" id="review-next" type="button">下一步</button>
-    </div>
-  </div>`;
-}
-
-/** 记错了：撤销本次「认识」，按「不认识」重新处理（不重复统计、不推进长期），随后进入拼写 */
+/** 记错了：回滚并按不认识处理 */
 function reviewCorrection() {
   const word = reviewSession.current;
   if (!reviewSession.snapshot) return;
-  ttsStop();
-  reviewStore.words[word] = reviewSession.snapshot; // 回滚本次判断
+  
+  reviewStore.words[word] = reviewSession.snapshot;
   reviewSession.snapshot = null;
-  answerReview(word, "unknown"); // 按不认识安排下一次复习
-  reviewSession.stats.known = Math.max(0, reviewSession.stats.known - 1);
+  answerReview(word, "unknown");
+  
+  const prev = reviewSession.lastResult;
+  if (prev && reviewSession.stats[prev] > 0) reviewSession.stats[prev] -= 1;
   reviewSession.stats.unknown += 1;
   reviewSession.lastResult = "unknown";
   saveReviewSession();
-  goSpell();
+  
+  rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 释义确认完成 → 进入拼写训练（拼写不参与记忆曲线，纯附加强化；不自动播放读音） */
-function goSpell() {
-  ttsStop(); // 拼写阶段不自动播放
-  reviewSession.step = "spell";
+/** 进入下一个词或过渡页 */
+function reviewNext() {
+  ttsStop();
+  reviewSession.idx += 1;
+  reviewSession.step = "answer";
+  reviewSession.lastResult = null;
+  reviewSession.snapshot = null;
+  saveReviewSession();
+  renderReviewByPhase();
+}
+
+/** 进入拼写阶段 */
+function goToSpellPhase() {
+  // 初始化拼写队列（随机打乱）
+  reviewSession.spellQueue = shuffleArray(reviewSession.queue.slice());
+  reviewSession.spellIdx = 0;
+  reviewSession.phase = "spell";
   reviewSession.spell = { submitted: false, correct: false, input: "" };
   saveReviewSession();
-  renderReviewSpell(reviewSession.current);
+  renderReviewByPhase();
 }
 
-/** 拼写界面：中文释义提示 + 输入框 + 提交；结果不影响记忆曲线 */
-function renderReviewSpell(word) {
-  const total = reviewSession.queue.length;
-  const sp = reviewSession.spell;
-  const body = $("#review-body");
-  const defHint = (senseLines(word)[0] || briefOf(word)) || "根据释义拼写单词";
-  body.innerHTML = `<div class="review-spell">
-    <p class="review-progress">${reviewSession.idx + 1} / ${total}</p>
-    <p class="spell-hint-row">
-      <span class="spell-hint">根据释义拼写单词</span>
-      <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-    </p>
-    <p class="spell-def">${esc(defHint)}</p>
-    <input class="spell-input" id="spell-input" type="text" placeholder="输入英文单词" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(sp.input)}" />
-    <div class="spell-actions">
-      <button class="primary-btn spell-submit" id="spell-submit" type="button">${sp.submitted && !sp.correct ? "重新提交" : "确认"}</button>
-      <button class="primary-btn spell-next" id="spell-next" type="button">下一个</button>
-    </div>
-    <div class="spell-result" id="spell-result">${sp.submitted ? spellResultHTML(word, sp.correct) : ""}</div>
-  </div>`;
-  const input = $("#spell-input");
-  if (input) {
-    input.addEventListener("input", () => {
-      reviewSession.spell.input = input.value; // 输入内容实时保存（可恢复）
-      saveReviewSession();
-    });
-    setTimeout(() => input.focus(), 60);
-  }
-  // 拼写阶段不自动播放读音（仅提供扬声器手动播放）
-}
-
-function spellResultHTML(word, correct) {
-  return correct
-    ? `<p class="spell-word spell-correct">${esc(word)}</p><p class="spell-tip">拼写正确 ✓</p>`
-    : `<p class="spell-word spell-wrong">${esc(word)}</p><p class="spell-tip">正确拼写：${esc(word)} · 请重新输入</p>`;
-}
-
-/** 提交拼写：正确 → 绿 + 下一个；错误 → 红 + 正确拼写，须重新拼写（不改记忆曲线） */
+/** 提交拼写 */
 function submitSpell() {
   const word = reviewSession.current;
   const input = $("#spell-input");
   const v = (input ? input.value : reviewSession.spell.input).trim().toLowerCase();
+  
   reviewSession.spell.input = v;
   reviewSession.spell.submitted = true;
   reviewSession.spell.correct = (v === word);
-  saveReviewSession();
-  renderReviewSpell(word);
-}
-
-/** 拼写正确后进入下一个待复习单词 */
-function reviewNext() {
-  ttsStop(); // 离开当前单词，停止播放
-  reviewSession.idx += 1;
-  reviewSession.current = reviewSession.queue[reviewSession.idx] || null;
-  reviewSession.step = "answer";
-  reviewSession.lastResult = null;
-  reviewSession.snapshot = null;
-  reviewSession.spell = { submitted: false, correct: false, input: "" };
-  if (reviewSession.idx >= reviewSession.queue.length) {
-    clearReviewSession(); // 今日完成 → 清除会话，明天重新开始
-    renderReviewDone($("#review-body"));
+  
+  if (reviewSession.spell.correct) {
+    reviewSession.spellStats.correct += 1;
   } else {
-    saveReviewSession();
-    renderReviewByStep(); // 进入下一词判断页 → renderReviewCard 自动播放读音
+    reviewSession.spellStats.wrong += 1;
   }
+  
+  saveReviewSession();
+  rvRender(() => renderSpell($("#review-body")));
 }
 
-function renderReviewDone(body) {
-  const s = reviewSession.stats;
-  body.innerHTML = `<div class="review-done">
-    <div class="review-done-check">✓</div>
-    <h2 class="review-done-title">今日复习完成</h2>
-    <p class="review-done-sub">本次复习 ${s.n} 个单词</p>
-    <div class="review-stats">
-      <span class="review-stat review-stat-known"><b>${s.known}</b> 认识</span>
-      <span class="review-stat review-stat-fuzzy"><b>${s.fuzzy}</b> 模糊</span>
-      <span class="review-stat review-stat-unknown"><b>${s.unknown}</b> 不认识</span>
-    </div>
-    <p class="review-done-hint">今日暂无更多待复习单词</p>
-    <button class="primary-btn" id="review-done-back" type="button">返回首页</button>
-  </div>`;
+/** 跳过拼写 */
+function skipSpell() {
+  reviewSession.spellStats.skipped += 1;
+  reviewSession.spellIdx += 1;
+  reviewSession.spell = { submitted: false, correct: false, input: "" };
+  saveReviewSession();
+  renderReviewByPhase();
+}
+
+/** 拼写正确后进入下一个 */
+function spellNext() {
+  if (reviewSession.spell.correct) {
+    reviewSession.spellIdx += 1;
+    reviewSession.spell = { submitted: false, correct: false, input: "" };
+    saveReviewSession();
+  }
+  renderReviewByPhase();
 }
 
 /* ============================================================
@@ -1609,10 +1916,23 @@ function renderReviewEntry() {
   el.classList.toggle("muted", n === 0);
 }
 
+/** 统计数字轻反馈：值变化时弹跳一次（首次渲染与值不变时不触发） */
+function bumpStat(el, val) {
+  if (!el) return;
+  const s = String(val);
+  if (el.textContent === s) return;
+  const first = el.textContent === "";
+  el.textContent = s;
+  if (first) return;
+  el.classList.remove("bump");
+  void el.offsetWidth; // 重启动画
+  el.classList.add("bump");
+}
+
 function renderHome() {
   const list = todayWords();
-  $("#stat-new").textContent = statNew();
-  $("#stat-queries").textContent = statQueries();
+  bumpStat($("#stat-new"), statNew());
+  bumpStat($("#stat-queries"), statQueries());
   renderReviewEntry();
   renderPomoEntry();
   renderTasksEntry();
@@ -1694,8 +2014,11 @@ function renderWords() {
 function renderHistory() {
   const el = $("#history-list");
   const feed = [...records.history].reverse();
-  el.innerHTML = feed.length
-    ? feed.map((h, i) => {
+  // 长历史全量渲染会在每次 renderAll（输入即查命中）时重建数千节点导致输入卡顿：
+  // 只渲染最近 HISTORY_MAX 条，数据永久保存不变，底部保留总数标注
+  const shown = feed.slice(0, HISTORY_MAX);
+  el.innerHTML = shown.length
+    ? shown.map((h, i) => {
         const starred = isStarred(h.w);
         const action = starred
           ? `<span class="star-chip">已加入</span>`
@@ -1712,7 +2035,7 @@ function renderHistory() {
           ${action}
           <button class="del-btn" data-del="history" data-ts="${h.ts}" aria-label="删除记录" type="button">${TRASH_SVG}</button>
         </li>`;
-      }).join("") + `<li class="history-more">共 ${statQueries()} 条查询记录（永久保存）</li>`
+      }).join("") + `<li class="history-more">${feed.length > HISTORY_MAX ? `已显示最近 ${HISTORY_MAX} 条 · ` : ""}共 ${statQueries()} 条查询记录（永久保存）</li>`
     : `<li class="history-item" style="border-bottom:none;"><span class="history-def" style="margin:0;">还没有查询记录</span></li>`;
 }
 
@@ -1744,40 +2067,105 @@ function switchTab(name) {
 }
 
 $$(".tab").forEach((t) => t.addEventListener("click", () => { rolloverIfNeeded(); renderAll(); switchTab(t.dataset.tab); }));
-$$("[data-back='home']").forEach((b) => b.addEventListener("click", () => { switchTab("home"); renderAll(); }));
+$$("[data-back='home']").forEach((b) => b.addEventListener("click", () => {
+  if (document.body.classList.contains("review-active")) {
+    ttsStop();
+    exitReview();
+  }
+  switchTab("home");
+  renderAll();
+}));
 $$("[data-back='settings']").forEach((b) => b.addEventListener("click", () => switchTab("settings")));
 $("#view-all").addEventListener("click", () => switchTab("words"));
 $("#export-entry").addEventListener("click", () => switchTab("export"));
 
-/* Review 复习：入口卡片 + 页面内交互（答题 / 记错了 / 进入拼写 / 提交拼写 / 下一步 / 完成返回 / 清空队列） */
+/* Review 复习：入口卡片 + 页面内交互（两阶段沉浸式设计）
+   Phase 1: 词义复习（主动回忆）→ 过渡页 → Phase 2: 拼写复习（随机队列）→ 完成
+   快速连点防护：300ms 操作冷却 + 步骤门控 */
+let reviewActionAt = 0;
 $("#review-entry").addEventListener("click", openReview);
 $("#review-clear").addEventListener("click", confirmClearReview);
 $("#review-body").addEventListener("click", (e) => {
-  const ans = e.target.closest(".review-btn");
-  if (ans) { onReviewAnswer(ans.dataset.result); return; }
-  if (e.target.closest("#review-wrong")) { reviewCorrection(); return; }
-  if (e.target.closest("#review-next")) { goSpell(); return; } // 释义确认 → 拼写
-  if (e.target.closest("#spell-submit")) { submitSpell(); return; }
-  if (e.target.closest("#spell-next")) { reviewNext(); return; }
-  if (e.target.closest("#review-done-back")) { switchTab("home"); renderAll(); return; }
-  if (e.target.closest("#clear-no")) { renderReviewByStep(); return; }
+  const now = Date.now();
+  const ready = now - reviewActionAt >= 300;
+  const fire = (ok, fn) => { if (ok) { reviewActionAt = now; fn(); } };
+  
+  // Phase 1: 判断按钮（认识/模糊/不认识）
+  const ans = e.target.closest(".rv-btn[data-result]");
+  if (ans && reviewSession.phase === "meaning") {
+    fire(ready && reviewSession.step === "answer", () => onReviewAnswer(ans.dataset.result));
+    return;
+  }
+  
+  // Phase 1: 记错了
+  if (e.target.closest("#review-wrong")) {
+    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewCorrection);
+    return;
+  }
+  
+  // Phase 1: 下一个（释义确认后）
+  if (e.target.closest("#review-next")) {
+    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewNext);
+    return;
+  }
+  
+  // 过渡页：开始拼写复习
+  if (e.target.closest("#rv-go-spell")) {
+    fire(ready && reviewSession.phase === "transition", goToSpellPhase);
+    return;
+  }
+  
+  // Phase 2: 提交拼写
+  if (e.target.closest("#spell-submit")) {
+    fire(ready && reviewSession.phase === "spell", submitSpell);
+    return;
+  }
+  
+  // Phase 2: 跳过拼写
+  if (e.target.closest("#spell-skip")) {
+    fire(ready && reviewSession.phase === "spell", skipSpell);
+    return;
+  }
+  
+  // Phase 2: 下一个（拼写正确后）
+  if (e.target.closest("#spell-next")) {
+    fire(ready && reviewSession.phase === "spell", spellNext);
+    return;
+  }
+  
+  // 完成页：返回首页
+  if (e.target.closest("#review-done-back")) {
+    exitReview();
+    switchTab("home");
+    renderAll();
+    return;
+  }
+  
+  // 清空队列确认
+  if (e.target.closest("#clear-no")) { renderReviewByPhase(); return; }
   if (e.target.closest("#clear-yes")) {
     clearReviewQueue();
-    renderReviewByStep();
+    renderReviewByPhase();
     return;
   }
 });
 
-/** 清空复习队列确认层：只清 Review 数据，不碰生词本/查询记录/历史生词 */
+/** 退出 Review 沉浸模式 */
+function exitReview() {
+  document.body.classList.remove("review-active");
+}
+
+/** 清空复习队列确认层 */
 function confirmClearReview() {
   const body = $("#review-body");
-  body.innerHTML = `<div class="review-done">
-    <div class="review-done-check" style="background:rgba(255,149,0,.13);color:#FF9500;">!</div>
-    <h2 class="review-done-title">清空复习队列？</h2>
-    <p class="review-done-hint">将清除全部 Review 复习状态与计划，并以当前生词本重新建立<br>不会删除生词本 · 查询记录 · 历史生词</p>
-    <div class="review-detail-actions" style="margin-top:30px;">
-      <button class="review-wrong-btn" id="clear-no" type="button">取消</button>
-      <button class="primary-btn" id="clear-yes" type="button" style="margin-top:0;flex:1;">确认清空</button>
+  rvHideProgress();
+  body.innerHTML = `<div class="rv-transition rv-screen">
+    <div class="rv-transition-icon" style="background:rgba(255,149,0,.13);color:#FF9500;">!</div>
+    <h2 class="rv-transition-title">清空复习队列？</h2>
+    <p class="rv-transition-sub">将清除全部 Review 复习状态与计划，并以当前生词本重新建立<br>不会删除生词本 · 查询记录 · 历史生词</p>
+    <div class="rv-detail-actions" style="margin-top:30px;justify-content:center;">
+      <button class="rv-btn-wrong" id="clear-no" type="button">取消</button>
+      <button class="rv-btn-go" id="clear-yes" type="button" style="background:var(--text-2);color:#fff;">确认清空</button>
     </div>
   </div>`;
 }
@@ -1819,6 +2207,12 @@ $("#tasks-body").addEventListener("click", (e) => {
     toggleTaskDone(check.dataset.task);
     renderTasks();
     renderAll();
+    const el = $(`.task-check[data-task="${check.dataset.task}"]`);
+    if (el && el.classList.contains("checked")) { // 勾选完成：✓ 轻弹反馈（取消勾选不动画）
+      el.classList.remove("just-checked");
+      void el.offsetWidth;
+      el.classList.add("just-checked");
+    }
     return;
   }
   const delT = e.target.closest("[data-del-task]");
@@ -1924,6 +2318,13 @@ window.__back = function () {
   if (sheetOpen) { closeSheet(); return true; }
   if (floatOpen) { closeFloatPanel(); return true; }
   const active = $(".page.active");
+  if (active && active.id === "page-review") {
+    ttsStop();
+    exitReview();
+    switchTab("home");
+    renderAll();
+    return true;
+  }
   if (active && active.id !== "page-home") { switchTab("home"); renderAll(); return true; }
   return false; // 首页无上层：交由系统处理（默认退出）
 };
@@ -2095,10 +2496,17 @@ sheetInput.addEventListener("keydown", async (e) => {
 
 /* 点击词条：搜索结果行 = 查询（记录）；生词列表/历史行 = 回顾（不记录） */
 document.addEventListener("click", (e) => {
-  const spk = e.target.closest(".speaker-btn");
+  const spk = e.target.closest(".speaker-btn, .rv-speaker");
   if (spk) {
     e.stopPropagation(); // 不触发词条点击/查询
     ttsSpeak(spk.dataset.speak, 1); // 手动播放读音（纯辅助，不影响数据）
+    // Review 扬声器：极轻的缩放反馈（表现层）
+    if (spk.classList.contains("rv-speaker")) {
+      spk.classList.remove("pop");
+      void spk.offsetWidth;
+      spk.classList.add("pop");
+      setTimeout(() => spk.classList.remove("pop"), 450);
+    }
     return;
   }
   const one = e.target.closest(".add-one-btn");
@@ -2404,11 +2812,12 @@ function exportWords() {
   return exportState.content === "starred" ? starredWords() : todayWords();
 }
 
-/** 当前导出内容的查询次数：今日=当日查询数；历史=历史生词累计查询总数 */
+/** 当前导出内容的查询次数：今日=当前业务日的查询条数（按 ts 归日）；历史=历史生词累计查询总数 */
 function exportQueries() {
-  return exportState.content === "starred"
-    ? exportWords().reduce((s, w) => s + (wordMeta(w).total || 0), 0)
-    : statQueries();
+  if (exportState.content === "starred")
+    return exportWords().reduce((s, w) => s + (wordMeta(w).total || 0), 0);
+  const day = records.day || vocabDay();
+  return records.history.filter((h) => h && h.ts && bizDayOf(h.ts) === day).length;
 }
 
 function renderExportMeta() {
@@ -2507,10 +2916,16 @@ function downloadBlob(blob, filename) {
 /* PNG：SVG foreignObject → canvas（离线可用） */
 function htmlToPng(html) {
   const W = 720;
-  const H = 900;
   // <style> 位于 <head>，需一并提取进 foreignObject，否则 PNG 丢失排版
   const styles = (html.match(/<style[\s\S]*?<\/style>/g) || []).join("");
   const body = html.replace(/^[\s\S]*?<body|<\/body>[\s\S]*$/g, "");
+  // 先离屏测量真实内容高度：固定高度会把长生词列表截断（数据完整性）
+  const probe = document.createElement("div");
+  probe.style.cssText = `position:fixed;left:-9999px;top:0;width:${W}px;background:#fff;`;
+  probe.innerHTML = styles + body;
+  document.body.appendChild(probe);
+  const H = Math.max(600, Math.ceil(probe.scrollHeight) + 8);
+  probe.remove();
   return new Promise((resolve, reject) => {
     const img = new Image();
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">
@@ -2600,6 +3015,10 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   loadRecords(); // 后台悬浮查词可能已写入新记录
   rolloverIfNeeded();
+  // 悬浮查词期间生词本已变化（新增/删除）：与启动时同样的同步流程，
+  // 否则悬浮条确认的生词要等下次重启才会进入 Review 队列
+  syncReviewWithWords();
+  migrateReview();
   renderAll();
   if (overlayPending && hasBridge()) {
     overlayPending = false;

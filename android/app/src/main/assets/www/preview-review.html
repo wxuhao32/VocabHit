@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Review Preview - Inject Test Data</title></head>
+<body style="font-family:system-ui;padding:40px;text-align:center">
+  <h2>正在注入测试数据...</h2>
+  <p id="status">请稍候</p>
+<script>
+(function(){
+  const now = Date.now();
+  // 正确的键名: vc-review (REVIEW_KEY)
+  const testWords = {
+    "abandonment": {starred:true,added:now-86400000*5,nextAt:now-1000,stage:2,mode:"long",known:3,fuzzy:1,unknown:0},
+    "ambiguous":    {starred:true,added:now-86400000*4,nextAt:now-1000,stage:1,mode:"daily",known:2,fuzzy:2,unknown:1},
+    "benevolent":   {starred:true,added:now-86400000*3,nextAt:now-1000,stage:3,mode:"long",known:5,fuzzy:0,unknown:1},
+    "comprehensive":{starred:true,added:now-86400000*6,nextAt:now-1000,stage:2,mode:"booster",known:4,fuzzy:1,unknown:0},
+    "deteriorate":  {starred:true,added:now-86400000*2,nextAt:now-1000,stage:1,mode:"daily",known:1,fuzzy:3,unknown:2}
+  };
+  
+  // 写入 reviewStore 格式
+  const reviewData = { words: testWords };
+  localStorage.setItem("vc-review", JSON.stringify(reviewData));
+
+  // Review ↔ 生词本同步会清掉不在生词本（vc-records）中的词 → 同步注入生词本记录
+  const now2 = Date.now();
+  const recordsData = {
+    day: vocabDayOf(now2),
+    history: [],
+    words: Object.fromEntries(Object.keys(testWords).map((w) => [
+      w,
+      {
+        today: 1, total: 3, first: vocabDayOf(now2 - 86400000 * 7),
+        last: now2 - 3600000, starred: true, starredAt: now2 - 86400000 * 7,
+        firstQueriedAt: now2 - 86400000 * 7,
+      },
+    ])),
+  };
+  localStorage.setItem("vc-records", JSON.stringify(recordsData));
+
+  // 清除旧 Review 会话
+  localStorage.removeItem("vc-review-session-v2");
+  
+  function vocabDayOf(ts) {
+    const s = new Date(ts - 4 * 3600 * 1000);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${s.getFullYear()}-${p(s.getMonth() + 1)}-${p(s.getDate())}`;
+  }
+  
+  document.getElementById('status').innerHTML = '✅ 已注入 5 个测试单词到 vc-review + vc-records<br>即将跳转到首页...';
+  setTimeout(function(){ window.location.href = 'index.html'; }, 800);
+})();
+</script>
+</body>
+</html>
