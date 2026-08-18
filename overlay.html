@@ -217,7 +217,7 @@
       <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
         <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
       </svg>
-      <input id="q" type="text" placeholder="输入单词或短语..." autocomplete="off" />
+      <input id="q" type="text" placeholder="输入单词查释义" autocomplete="off" />
       <button class="ov-clear" id="clear" type="button" aria-label="清空输入">
         <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
           <path d="M4 4l8 8M12 4l-8 8"/>
@@ -352,6 +352,34 @@
     return [...ex, ...pre, ...con].slice(0, limit);
   }
 
+  /* ---- 中文释义反向查询（与主应用同一逻辑：中文关键词 → 释义符合的英文词条） ---- */
+  const isZh = (q) => /[\u4e00-\u9fff]/.test(String(q || ""));
+  let REV_IDX = null;
+  function revIndex() {
+    if (REV_IDX) return REV_IDX;
+    REV_IDX = Object.keys(DICT_DATA).map((w) => {
+      const defs = [];
+      ((DICT_DATA[w] || {}).senses || []).forEach(([, arr]) => {
+        (arr || []).forEach((s) => defs.push(s));
+      });
+      return { w, text: defs.join("；").toLowerCase(), first: (defs[0] || "").toLowerCase() };
+    });
+    return REV_IDX;
+  }
+  function revSearch(q, limit = 20) {
+    const kw = String(q || "").trim().toLowerCase();
+    if (!kw) return [];
+    const ex = [], pre = [], con = [];
+    for (const it of revIndex()) {
+      if (it.text.indexOf(kw) === -1) continue;
+      if (it.first === kw) ex.push(it.w);
+      else if (it.first.startsWith(kw)) pre.push(it.w);
+      else con.push(it.w);
+      if (ex.length + pre.length + con.length >= limit) break;
+    }
+    return [...ex, ...pre, ...con].slice(0, limit);
+  }
+
   /* ---- 主题跟随主应用（vc-theme 同源共享） ---- */
   function syncTheme() {
     try { document.documentElement.dataset.theme = localStorage.getItem("vc-theme") || "system"; }
@@ -413,6 +441,23 @@
     if (native) { AndroidOverlay.setDraggable(true); AndroidOverlay.releaseFocus(); reportSize(); }
   }
   window.__back = () => { if (expanded) collapse(); }; // 返回键 → 收起
+
+  /* ---- 应用内阅读页选中查词入口（原生注入；软件外/阅读页同一悬浮条系统） ----
+     展开 → 填入选中词 → 派发 input 事件复用既有查询管线（词典/历史/尺寸上报）。
+     返回 1 供原生注入方确认已执行（页面未就绪时原生会短暂重试）。 */
+  window.__query = function (w) {
+    w = String(w == null ? "" : w).trim();
+    if (!w) return 1;
+    syncTheme(); // 主应用内主题可能已切换
+    if (edgeMode) exitEdge();
+    if (!expanded) expand();
+    sessionWord = null;
+    sessionConfirmed = null;
+    q.value = w;
+    updateClearBtn();
+    q.dispatchEvent(new Event("input", { bubbles: true }));
+    return 1;
+  };
 
   /* ---- 贴边收缩：原生吸附动画结束后调用 ---- */
   window.__enterEdge = function () {
@@ -612,6 +657,25 @@
       return;
     }
     updateClearBtn();
+    // 中文输入 → 释义反向查询（英文查询路径不变）
+    if (isZh(raw)) {
+      const zhHits = revSearch(raw);
+      if (zhHits.length) {
+        result.innerHTML =
+          `<p class="hint" style="padding:10px 16px 2px;text-align:left">按中文释义找到 ${zhHits.length} 个单词</p>` +
+          zhHits.map((w) => `<button class="hit" data-w="${esc(w)}" type="button">
+            <span class="row-main">
+              <span class="hit-w">${esc(w)}${meta(w).total ? `<sup>${meta(w).total}</sup>` : ""}</span>
+              <span class="hit-d">${esc(brief(w))}</span>
+            </span>
+            <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+          </button>`).join("");
+      } else {
+        result.innerHTML = `<p class="hint">没有找到释义包含「${esc(raw)}」的单词</p>`;
+      }
+      requestAnimationFrame(reportSize);
+      return;
+    }
     const exact = raw.toLowerCase();
     if (entry(exact)) renderDetail(exact);
     else {
@@ -635,6 +699,16 @@
     if (e.key !== "Enter") return;
     e.preventDefault();
     const raw = q.value.trim().toLowerCase();
+    // 中文输入 → 反查：回车直接查询匹配度最高的英文词
+    if (isZh(raw)) {
+      const top = revSearch(raw, 1)[0];
+      if (top) {
+        if (top !== sessionWord) { recordHistory(top); sessionWord = top; }
+        if (top !== sessionConfirmed) { confirm(top); sessionConfirmed = top; }
+        q.value = top; renderDetail(top); reportSize(); updateClearBtn();
+      }
+      return;
+    }
     let target = entry(raw) ? raw : null; // 考研 / ECDICT 已加载
     if (!target) target = (await window.ECDICT.getAsync(raw)) ? raw : null; // ECDICT 兜底
     if (!target) target = search(raw, 1)[0]; // 考研候选

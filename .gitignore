@@ -23,9 +23,19 @@ tools/
 *.png
 *.jpg
 
+# AI 工具配置/记忆目录
+.codebuddy/
+.workbuddy/
+.qwen-agent/
+
 # APK（如需发布 APK 请使用 GitHub Releases）
 *.apk
-!VocabHit-*.apk
+
+# 构建日志
+build_log*.txt
+
+# 个人文档（不纳入版本库）
+Knowledge_Learning_Repository_*.md
 
 # 系统
 .DS_Store

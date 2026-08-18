@@ -98,12 +98,18 @@ public class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/www/index.html");
     }
 
-    /* ---------- 前后台互斥：应用在前台时隐藏系统悬浮条（应用内已有悬浮查词条） ---------- */
+    /* ---------- 前后台互斥：应用在前台时隐藏系统悬浮条 ----------
+       例外：Knowledge / Repository 阅读页内保持显示（与软件外同一悬浮条，
+       由前端 AndroidBridge.setOverlayInApp 通知进入/退出阅读页） */
+
+    /** 前端处于阅读页（Knowledge 原文 / Repository 来源原文）时为 true：
+        onResume 据此保持系统悬浮条可见，实现软件内阅读页复用同一悬浮查词条 */
+    private volatile boolean overlayInApp = false;
 
     @Override
     protected void onResume() {
         super.onResume();
-        OverlayService.requestVisibility(this, false);
+        OverlayService.requestVisibility(this, overlayInApp);
     }
 
     @Override
@@ -459,6 +465,219 @@ public class MainActivity extends Activity {
                 stopService(svc);
             }
         }
+
+        /* ---------- 应用内阅读页悬浮查词（复用系统级悬浮条：同一 UI/拖动/查询，纯新增段） ---------- */
+
+        /** 进入/退出 Knowledge / Repository 阅读页：控制应用前台时系统悬浮条的显隐。
+            前端已确认「后台悬浮查词」开关开启（vc-overlay）才会传 true。 */
+        @JavascriptInterface
+        public void setOverlayInApp(final boolean on) {
+            overlayInApp = on;
+            if (!on) {
+                OverlayService.requestVisibility(MainActivity.this, false);
+                return;
+            }
+            if (!Settings.canDrawOverlays(MainActivity.this)) return;
+            Intent svc = new Intent(MainActivity.this, OverlayService.class);
+            svc.putExtra(OverlayService.EXTRA_SHOW, true);
+            try {
+                startForegroundService(svc);
+            } catch (Exception e) {
+                try { startService(svc); } catch (Exception ignored) { }
+            }
+        }
+
+        /** 阅读页普通阅读态选中英文单词/短语 → 悬浮条自动展开并查询（摘取模式下前端不会调用） */
+        @JavascriptInterface
+        public void overlayQuery(final String word) {
+            final String w = word == null ? "" : word.trim();
+            if (w.isEmpty()) return;
+            if (!Settings.canDrawOverlays(MainActivity.this)) return;
+            Intent svc = new Intent(MainActivity.this, OverlayService.class);
+            svc.putExtra(OverlayService.EXTRA_SHOW, true);
+            svc.putExtra(OverlayService.EXTRA_QUERY, w);
+            try {
+                startForegroundService(svc);
+            } catch (Exception e) {
+                try { startService(svc); } catch (Exception ignored) { }
+            }
+        }
+
+        /** 进入摘取模式/编辑面板时收起悬浮条展开态（两种文字交互互不干扰；不启动服务） */
+        @JavascriptInterface
+        public void overlayCollapse() {
+            OverlayService.requestCollapse(MainActivity.this);
+        }
+
+        /* ---------- Knowledge 模块：学习文档选择（纯新增，结果经 window.__onDocParsed 回调前端） ---------- */
+
+        @JavascriptInterface
+        public void pickDocument() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    it.addCategory(Intent.CATEGORY_OPENABLE);
+                    it.setType("*/*"); // 部分机型对 docx 的 MIME 过滤不可靠，放宽后由解析器嗅探
+                    it.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                            "text/plain",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            "application/octet-stream",
+                            "application/zip"
+                    });
+                    startActivityForResult(it, REQ_PICK_DOC);
+                } catch (Exception e) {
+                    toast("无法打开文件选择器");
+                    emitDocParsed(null); // 通知前端复位「正在解析」状态
+                }
+            });
+        }
+
+        /* ---------- Knowledge 模块：图片 OCR 导入（相册 / 拍照，纯新增段） ----------
+           结果经 window.__onImageParsed 回传前端；OCR 由 OcrParser（ML Kit 离线中文模型）完成 */
+
+        /** 相册选择 JPG/JPEG/PNG 图片 */
+        @JavascriptInterface
+        public void pickImage() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    it.addCategory(Intent.CATEGORY_OPENABLE);
+                    it.setType("image/*");
+                    it.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/jpeg", "image/png"});
+                    startActivityForResult(it, REQ_PICK_IMG);
+                } catch (Exception e) {
+                    toast("无法打开相册");
+                    emitImageParsed(null);
+                }
+            });
+        }
+
+        /** 调用系统相机拍摄照片（临时文件经 FileProvider 共享，OCR 后自动清理） */
+        @JavascriptInterface
+        public void takePhoto() {
+            runOnUiThread(() -> {
+                try {
+                    java.io.File dir = new java.io.File(getCacheDir(), "ocr");
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File photo = new java.io.File(dir, "photo_" + System.currentTimeMillis() + ".jpg");
+                    photoUri = androidx.core.content.FileProvider.getUriForFile(
+                            MainActivity.this, getPackageName() + ".fileprovider", photo);
+                    Intent it = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+                    it.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, photoUri);
+                    it.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(it, REQ_TAKE_PHOTO);
+                } catch (Exception e) {
+                    toast("无法打开相机");
+                    emitImageParsed(null);
+                }
+            });
+        }
+    }
+
+    /* ---------- Knowledge 模块：文档/图片解析结果回传（纯新增段，不影响既有导出/权限流程） ---------- */
+
+    private static final int REQ_PICK_DOC = 4101;
+    private static final int REQ_PICK_IMG = 4102;
+    private static final int REQ_TAKE_PHOTO = 4103;
+    private Uri photoUri = null; // 拍照临时文件 URI（OCR 完成后清理）
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQ_PICK_DOC) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                emitDocParsed(null); // 用户取消
+                return;
+            }
+            final Uri uri = data.getData();
+            // 解析放后台线程（文档可能较大），完成后主线程回调前端
+            new Thread(() -> {
+                org.json.JSONObject json = new org.json.JSONObject();
+                try {
+                    DocumentParser.Result r = DocumentParser.parse(getContentResolver(), uri);
+                    if (r.ok) {
+                        json.put("ok", true).put("text", r.text)
+                            .put("name", queryDisplayName(uri));
+                    } else {
+                        json.put("ok", false).put("error", r.error);
+                    }
+                } catch (Exception e) {
+                    try { json.put("ok", false).put("error", "解析失败：" + e.getMessage()); }
+                    catch (Exception ignored) { }
+                }
+                emitDocParsed(json.toString());
+            }, "doc-parse").start();
+            return;
+        }
+
+        /* 图片 OCR：相册选择与拍照共用同一解析链路（ML Kit 离线识别） */
+        if (requestCode == REQ_PICK_IMG || requestCode == REQ_TAKE_PHOTO) {
+            final Uri uri;
+            if (requestCode == REQ_PICK_IMG) {
+                uri = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+            } else { // 拍照：结果写往 photoUri（Intent data 为空）
+                uri = (resultCode == RESULT_OK) ? photoUri : null;
+            }
+            if (uri == null) {
+                emitImageParsed(null); // 用户取消
+                return;
+            }
+            final String name = requestCode == REQ_PICK_IMG
+                    ? queryDisplayName(uri) : "拍照图片_" + new java.text.SimpleDateFormat(
+                        "MMdd_HHmm", java.util.Locale.US).format(new java.util.Date()) + ".jpg";
+            OcrParser.parse(this, uri, text -> {
+                runOnUiThread(() -> {
+                    if (requestCode == REQ_TAKE_PHOTO) deletePhotoTemp(uri); // 拍照临时文件用后即删
+                    org.json.JSONObject json = new org.json.JSONObject();
+                    try {
+                        if (text == null) json.put("ok", false).put("error", "OCR_UNAVAILABLE");
+                        else if (text.trim().isEmpty()) json.put("ok", false).put("error", "OCR_EMPTY");
+                        else json.put("ok", true).put("text", text).put("name", name);
+                    } catch (Exception ignored) { }
+                    emitImageParsed(json.toString());
+                });
+            });
+        }
+    }
+
+    /** 图片 OCR 结果注入前端：window.__onImageParsed(json|null)；null = 用户取消 */
+    private void emitImageParsed(final String jsonArg) {
+        final String js = "window.__onImageParsed&&window.__onImageParsed("
+                + (jsonArg == null ? "null" : jsonArg) + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    /** 清理拍照临时文件（OCR 文本已持久化，图片原件不保留） */
+    private void deletePhotoTemp(Uri uri) {
+        try {
+            if (photoUri != null && photoUri.equals(uri)) {
+                java.io.File f = new java.io.File(uri.getPath());
+                if (f.exists()) f.delete();
+                photoUri = null;
+            }
+        } catch (Exception ignored) { }
+    }
+
+    /** 解析结果注入前端：window.__onDocParsed(json|null)；null = 用户取消 */
+    private void emitDocParsed(final String jsonArg) {
+        final String js = "window.__onDocParsed&&window.__onDocParsed("
+                + (jsonArg == null ? "null" : jsonArg) + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    private String queryDisplayName(Uri uri) {
+        try (android.database.Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+            if (c != null && c.moveToFirst()) {
+                int i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                if (i >= 0) return c.getString(i);
+            }
+        } catch (Exception ignored) { }
+        return uri.getLastPathSegment();
     }
 
     private void startExport(String name, String fmt, String html) {

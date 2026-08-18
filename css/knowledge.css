@@ -1,0 +1,844 @@
+/* ============================================================
+   Knowledge Learning & Repository — 模块样式 v2
+   （独立新文件：不修改既有 style.css；基于既有设计令牌，
+    浅色/深色主题自动跟随 var(--*)）
+
+   v2 修复要点：
+   1. [hidden] 显式兜底 —— 类样式的 display:flex/block 会覆盖 UA
+      样式表的 [hidden]{display:none}，导致「解析中/选取解释」
+      等元素带 hidden 属性仍然显示（首页/冷启动幽灵 UI 的根因），
+      此处以 !important 作用于本模块元素，修正优先级；
+   2. .kn-pick-btn svg 显式定宽高 —— 内联 SVG 无 class/尺寸时按
+      替换元素默认 300×150 渲染，曾把编辑弹窗撑爆（巨型图标根因）；
+   3. 新增「添加文本模式」底部操作条 .kn-selbar（固定底栏而非
+      跟随选区浮动，避免与系统选择菜单互相遮挡）。
+   ============================================================ */
+
+/* ---------- [hidden] 优先级修复（仅限本模块元素，防幽灵 UI） ---------- */
+
+#kn-parsing[hidden],
+#kn-error[hidden],
+#kn-newcat[hidden],
+#kn-empty[hidden],
+#rp-empty[hidden],
+#rp-search-clear[hidden],
+#kn-selbar[hidden],
+#kn-file[hidden] {
+  display: none !important;
+}
+
+/* ---------- Knowledge 学习资料列表页 ---------- */
+
+.kn-upload-btn { margin: 2px 0 6px; }
+
+.kn-parsing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 14px;
+}
+
+.kn-spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: knSpin 0.7s linear infinite;
+}
+
+@keyframes knSpin { to { transform: rotate(360deg); } }
+
+/* 解析失败：显式错误状态（非弹窗），下次上传或成功后清除 */
+.kn-error {
+  margin: 12px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 59, 48, 0.35);
+  border-radius: var(--r-card);
+  background: rgba(255, 59, 48, 0.07);
+  color: #D92C20;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.kn-list {
+  margin-top: 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.kn-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 14px 16px;
+  cursor: pointer;
+  transition: background var(--t-fast) ease;
+}
+
+.kn-item + .kn-item { border-top: 1px solid var(--hairline); }
+.kn-item:active { background: var(--surface-2); }
+
+.kn-item-main { flex: 1; min-width: 0; }
+
+.kn-item-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-item-meta { margin-top: 3px; font-size: 12.5px; color: var(--text-3); }
+
+.kn-item-del {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--text-3);
+  transition: color var(--t-fast) ease, background var(--t-fast) ease;
+}
+
+.kn-item-del svg { width: 16px; height: 16px; }
+.kn-item-del.confirm { color: #FF3B30; background: rgba(255, 59, 48, 0.09); font-size: 12.5px; font-weight: 600; width: auto; padding: 0 10px; }
+
+.kn-empty {
+  margin-top: 14px;
+  padding: 42px 24px;
+  text-align: center;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-card);
+  color: var(--text-2);
+  font-size: 14.5px;
+}
+
+.kn-empty-sub { margin-top: 6px; font-size: 12.5px; color: var(--text-3); }
+
+/* ---------- Reader 独立二级阅读页 ---------- */
+
+/* 沉浸阅读：隐藏底部 TabBar（仅本模块加 body class，不动既有样式） */
+body.kn-reading .tabbar { display: none; }
+body.kn-reading .app { padding-bottom: calc(28px + var(--sab)); }
+
+/* 添加文本模式：正文区让出底部操作条空间；隐藏入口按钮避免误触 */
+body.kn-selecting .app { padding-bottom: calc(104px + var(--sab)); }
+body.kn-selecting #kn-add { display: none; }
+body.kn-selecting .rd-tip { visibility: hidden; }
+
+.kn-reader-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 10px 0 10px;
+  background: var(--rv-glass);
+  backdrop-filter: var(--scrim-blur);
+  -webkit-backdrop-filter: var(--scrim-blur);
+}
+
+.kn-reader-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阅读页返回按钮垂直对齐修复：全局 .back-btn 自带 margin-bottom:14px，
+   在 align-items:center 的头部里把返回按钮中心抬高 ~7px，与右侧
+   「添加知识」按钮不平行。此处仅对阅读页头部内的返回按钮归零该边距，
+   使两按钮中心自然对齐；不改全局类，其他页面返回按钮原样。 */
+.kn-reader-header .back-btn { margin-bottom: 0; }
+
+/* 「＋ 添加知识」：摘取模式唯一入口 */
+.kn-add-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: var(--shadow-float);
+  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+}
+
+.kn-add-btn:active { transform: scale(0.95); opacity: 0.9; }
+
+.rd-body { max-width: 620px; margin: 0 auto; }
+
+.rd-text {
+  padding: 18px 2px 32px;
+  font-size: 16.5px;
+  line-height: 2.02;
+  letter-spacing: 0.012em;
+  color: var(--text);
+  word-break: break-word;
+}
+
+/* 段落：忠实原文顺序与空行；pre-wrap 保留段内空格 */
+.kn-p { white-space: pre-wrap; min-height: 1em; }
+.kn-p-empty { min-height: 0.9em; }
+
+/* 结构化标题（来源：.docx w:pStyle 标记 \u0001-\u0003 → h1/h2/h3） */
+.kn-h1, .kn-h2, .kn-h3 { font-weight: 700; line-height: 1.35; color: var(--text); margin-top: 28px; }
+.kn-h1 { font-size: 22px; letter-spacing: -0.01em; }
+.kn-h2 { font-size: 19px; }
+.kn-h3 { font-size: 17px; }
+
+/* 列表（无序 / 有序，连续同类型项自动折叠） */
+.kn-ul, .kn-ol { margin: 8px 0 4px 22px; padding: 0; }
+.kn-ul { list-style: disc; }
+.kn-ol { list-style: decimal; }
+.kn-li { white-space: pre-wrap; }
+
+/* 移动端适配表格（docx w:tbl → HTML table） */
+.kn-table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 12px 0;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.kn-table tr { border-bottom: 1px solid var(--hairline); }
+.kn-table tr:first-child { font-weight: 600; }
+.kn-td {
+  padding: 7px 10px;
+  vertical-align: top;
+  word-break: normal;
+  overflow-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.kn-p.kn-flash { animation: knFlash 2.2s var(--ease); border-radius: 8px; }
+
+@keyframes knFlash {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
+/* ---------- 来源定位后的知识点荧光高亮（阅读软件“荧光笔划线”感） ----------
+   临时 DOM 标记：仅存在于当前阅读会话，重渲染即消失，绝不写入学习资料 */
+.kn-hl {
+  --kn-hl-strong: rgba(255, 183, 0, 0.72);
+  --kn-hl-soft: rgba(255, 213, 79, 0.46);
+  background: var(--kn-hl-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  animation: knHlIn 1.8s var(--ease);
+}
+
+@keyframes knHlIn {
+  from { background: var(--kn-hl-strong); }
+  to { background: var(--kn-hl-soft); }
+}
+
+html[data-theme="dark"] .kn-hl {
+  --kn-hl-strong: rgba(255, 196, 0, 0.42);
+  --kn-hl-soft: rgba(255, 196, 0, 0.26);
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .kn-hl {
+    --kn-hl-strong: rgba(255, 196, 0, 0.42);
+    --kn-hl-soft: rgba(255, 196, 0, 0.26);
+  }
+}
+
+/* 用户划重点（荧光笔效果，持久化存储，与来源高亮 .kn-hl 互不干扰） */
+.kn-hl-user {
+  background: rgba(255, 235, 59, 0.32);
+  border-radius: 2px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+html[data-theme="dark"] .kn-hl-user {
+  background: rgba(255, 235, 59, 0.22);
+}
+
+.rd-tip {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* ---------- 添加文本模式：专用底部操作条 ----------
+   固定底栏而非跟随选区浮动：不与系统原生选择菜单争夺位置；
+   仅 body.kn-selecting 时可见（hidden 属性由 JS 控制） */
+.kn-selbar {
+  position: fixed;
+  z-index: 70;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(14px + var(--sab));
+  width: min(480px, calc(100vw - 24px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 16px;
+  border-radius: 18px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-float);
+}
+
+.kn-selbar-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kn-selbar-btn {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 99px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+}
+
+.kn-selbar-btn:active { transform: scale(0.95); }
+
+.kn-selbar-btn.ghost {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.kn-selbar-btn.solid {
+  background: var(--accent);
+  color: #fff;
+}
+
+.kn-selbar-btn.solid:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ---------- 条目编辑 Bottom Sheet ---------- */
+
+.kn-sheet { z-index: 90; }
+
+.kn-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 20px 10px;
+  border-bottom: 1px solid var(--hairline);
+  flex: none;
+}
+
+.kn-sheet-title { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; }
+.kn-sheet-cancel { padding: 6px 2px; color: var(--text-2); font-size: 14px; }
+
+.kn-sheet-body {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px 20px calc(20px + var(--sab));
+}
+
+.kn-textarea {
+  width: 100%;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  padding: 11px 13px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text);
+  resize: none;
+  transition: border-color var(--t-fast) ease;
+}
+
+.kn-textarea:focus { outline: none; border-color: var(--accent); }
+.kn-textarea::placeholder { color: var(--text-3); }
+
+#kn-content { font-size: 15px; font-weight: 550; }
+
+.kn-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kn-cat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 550;
+  transition: all var(--t-fast) ease;
+}
+
+.kn-cat:active { transform: scale(0.96); }
+.kn-cat.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.kn-cat-add { border-style: dashed; color: var(--accent); }
+
+.kn-newcat {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.kn-newcat input {
+  flex: 1;
+  height: 38px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.kn-newcat input:focus { outline: none; }
+
+.kn-newcat button {
+  flex: none;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--r-field);
+  background: var(--accent);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.kn-field-gap { margin-top: 18px; }
+
+.kn-pick-btn {
+  width: 100%;
+  height: 40px;
+  margin-top: 10px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-field);
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 550;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* 修复：内联 SVG 必须显式定宽高，否则按替换元素默认 300×150 渲染，
+   撑爆弹窗形成“巨型文件图标” */
+.kn-pick-btn svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+.kn-pick-btn:active { background: var(--accent-soft); }
+
+/* ---------- 导入方式菜单（文档 / 图片 / 拍照，复用既有 sheet 骨架） ---------- */
+
+.kn-import-sheet { z-index: 90; }
+
+.kn-import-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 4px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.kn-import-item:last-child { border-bottom: none; }
+
+.kn-import-ico {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-field);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.kn-import-ico svg { width: 19px; height: 19px; }
+
+.kn-import-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+.kn-import-name { font-size: 14.5px; font-weight: 600; color: var(--text); }
+
+.kn-import-desc { font-size: 12px; color: var(--text-2); }
+
+.kn-import-item:active .kn-import-ico { opacity: 0.7; }
+
+#kn-save { margin-top: 20px; }
+
+/* 手动创建模式：无原文可选，隐藏「从原文选择」按钮 */
+#kn-sheet[data-manual] #kn-pick-explain,
+#kn-sheet[data-manual] #kn-pick-context { display: none; }
+
+/* ---------- Repository 页 ---------- */
+
+/* 页头 flex 布局对齐（与阅读页 .kn-reader-header 同一模式） */
+#page-repo .page-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#page-repo .page-header .back-btn { margin-bottom: 0; }
+
+/* 搜索框：范围与当前分类联动（筛选管线见 js） */
+.rp-search {
+  position: relative;
+  margin: 4px 0 12px;
+}
+
+.rp-search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  color: var(--text-3);
+  pointer-events: none;
+}
+
+.rp-search-icon svg { width: 15px; height: 15px; }
+
+#rp-search-input {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  padding: 0 40px 0 36px;
+  font-size: 14px;
+  color: var(--text);
+  transition: border-color var(--t-fast) ease;
+}
+
+#rp-search-input:focus { outline: none; border-color: var(--accent); }
+#rp-search-input::placeholder { color: var(--text-3); }
+
+.rp-search-clear {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--text-3);
+  font-size: 13px;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+}
+
+.rp-search-clear:active { background: var(--surface); color: var(--text); }
+
+/* 数量说明整体下移：与类型栏拉开层级，观感更舒展 */
+#rp-count { margin-top: 12px; }
+
+/* 搜索结果中的关键词轻量高亮（不影响布局与来源定位） */
+mark.kn-kw {
+  background: var(--accent-soft);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0;
+}
+
+.rp-chips {
+  display: flex;
+  gap: 8px;
+  margin: -6px 0 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding: 2px 0 6px;
+}
+
+.rp-chips::-webkit-scrollbar { display: none; }
+.rp-chips .kn-cat { flex: none; }
+
+.rp-list { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+.rp-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.rp-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 14px 14px 14px 16px;
+  cursor: pointer;
+}
+
+.rp-card-main { flex: 1; min-width: 0; }
+
+.rp-tag {
+  display: inline-block;
+  padding: 2.5px 9px;
+  border-radius: 99px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+
+.rp-clamp {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.rp-meta { margin-top: 6px; font-size: 12.5px; color: var(--text-3); }
+
+.rp-arrow {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+  transition: transform var(--t-med) var(--ease);
+}
+
+.rp-card.open .rp-arrow { transform: rotate(90deg); }
+
+/* 展开动画：grid 行高 0fr → 1fr */
+.rp-detail-wrap {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--t-med) var(--ease);
+}
+
+.rp-card.open .rp-detail-wrap { grid-template-rows: 1fr; }
+.rp-detail { overflow: hidden; min-height: 0; }
+.rp-detail-in { padding: 2px 16px 16px; border-top: 1px solid var(--hairline); }
+
+.rp-label {
+  margin: 14px 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+}
+
+.rp-full { font-size: 16px; font-weight: 620; line-height: 1.55; color: var(--text); word-break: break-word; }
+.rp-explain { font-size: 14.5px; line-height: 1.7; color: var(--text); word-break: break-word; }
+
+.rp-quote {
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent-soft);
+  background: var(--surface-2);
+  border-radius: 0 10px 10px 0;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.rp-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 8px 8px 0;
+  padding: 7px 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 99px;
+  background: var(--surface);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.rp-src svg { width: 14px; height: 14px; color: var(--accent); flex: none; }
+.rp-src b { color: var(--text); font-weight: 600; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-src.missing { opacity: 0.55; }
+
+.rp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.rp-time { font-size: 12px; color: var(--text-3); }
+
+.rp-del {
+  padding: 6px 12px;
+  border-radius: 99px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  transition: all var(--t-fast) ease;
+}
+
+.rp-del.confirm { color: #FF3B30; background: rgba(255, 59, 48, 0.09); }
+
+/* ---------- 删除整个类型：长按入口 + 居中确认弹窗（输入类型名才可删） ---------- */
+
+/* 长按删除需禁止文本选择/系统弹出，否则长按会被系统选中菜单打断 */
+.kn-cat {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.kn-catdel-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: knCatdelIn 0.18s ease;
+}
+
+@keyframes knCatdelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.kn-catdel {
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 20px 18px 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.28);
+  animation: knCatdelPop 0.18s var(--ease);
+}
+
+@keyframes knCatdelPop {
+  from { transform: scale(0.94); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.kn-catdel-title {
+  font-size: 16.5px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.kn-catdel-text {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+
+.kn-catdel-text b { color: #FF3B30; font-weight: 650; }
+
+.kn-catdel-tip {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin: 12px 0 8px;
+}
+
+#kn-catdel-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  font-size: 14.5px;
+  color: var(--text);
+}
+
+#kn-catdel-input:focus {
+  outline: none;
+  border-color: #FF3B30;
+}
+
+.kn-catdel-btns {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.kn-catdel-btns button {
+  flex: 1;
+  height: 42px;
+  border-radius: 12px;
+  font-size: 14.5px;
+  font-weight: 600;
+  transition: opacity var(--t-fast) ease;
+}
+
+#kn-catdel-cancel {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+#kn-catdel-ok {
+  background: #FF3B30;
+  color: #fff;
+}
+
+#kn-catdel-ok:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}

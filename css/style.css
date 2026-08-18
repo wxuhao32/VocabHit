@@ -744,6 +744,18 @@ ul { list-style: none; }
 
 .sheet-hint { padding: 18px 22px 8px; font-size: 13.5px; color: var(--text-3); }
 
+/* 中文释义反查结果的轻量提示行（一行，不干扰结果列表） */
+.sheet-reverse-tip {
+  padding: 14px 22px 4px;
+  font-size: 12px;
+  font-weight: 520;
+  color: var(--accent);
+  opacity: 0.78;
+}
+
+/* 生词页数量说明下移：与视图切换器拉开间距，层级更舒展（仅生词页） */
+#page-words .page-subtitle { margin-top: -2px; }
+
 /* ---------- 底部导航 ---------- */
 .tabbar {
   position: fixed;
@@ -1007,6 +1019,7 @@ body.review-active #page-review .back-btn:active {
   justify-content: center;
   gap: 12px;
   max-width: 100%;
+  padding-left: 50px; /* 补偿右侧扬声器宽度(38px)+gap(12px)，使单词视觉居中 */
 }
 .rv-word {
   font-size: 42px;

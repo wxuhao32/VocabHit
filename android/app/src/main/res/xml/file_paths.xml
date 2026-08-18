@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Knowledge 图片 OCR：拍照临时文件目录（cache/ocr，OCR 完成后自动删除） -->
+<paths>
+    <cache-path name="ocr_photos" path="ocr/" />
+</paths>

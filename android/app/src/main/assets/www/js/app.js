@@ -46,6 +46,45 @@ function dictSearch(q, limit = 8) {
   return [...exact, ...prefix, ...contains].slice(0, limit);
 }
 
+/* ---------- 中文释义反向查询：中文关键词 → 释义符合的多个英文词条 ----------
+   双向查询：英文 → 释义（原有）；中文 → 英文词汇（新增）。
+   仅含中文时触发，英文查询路径零改动；只检索考研词书（本地 6000 词，
+   词频降序），索引惰性构建一次后常驻内存，同步查询毫秒级。 */
+
+function isChineseQuery(q) {
+  return /[\u4e00-\u9fff]/.test(String(q || ""));
+}
+
+let REVERSE_INDEX = null; // [{w, text(全部释义小写拼接), first(首个释义小写)}]，按词频降序
+
+function reverseIndex() {
+  if (REVERSE_INDEX) return REVERSE_INDEX;
+  REVERSE_INDEX = DICT_KEYS.map((w) => {
+    const defs = [];
+    ((DICT_DATA[w] || {}).senses || []).forEach(([, arr]) => {
+      (arr || []).forEach((s) => defs.push(s));
+    });
+    return { w, text: defs.join("；").toLowerCase(), first: (defs[0] || "").toLowerCase() };
+  });
+  return REVERSE_INDEX;
+}
+
+/** 反查匹配排序：首释义完全等于关键词 > 首释义以关键词开头 > 任一释义包含关键词；
+    同级保持词频降序（考研高频优先）；limit 控制返回量避免长列表卡顿 */
+function reverseSearch(q, limit = 30) {
+  const kw = String(q || "").trim().toLowerCase();
+  if (!kw) return [];
+  const exact = [], prefix = [], contain = [];
+  for (const it of reverseIndex()) {
+    if (it.text.indexOf(kw) === -1) continue;
+    if (it.first === kw) exact.push(it.w);
+    else if (it.first.startsWith(kw)) prefix.push(it.w);
+    else contain.push(it.w);
+    if (exact.length + prefix.length + contain.length >= limit) break;
+  }
+  return [...exact, ...prefix, ...contain].slice(0, limit);
+}
+
 /** ECDICT 词条（{p,s}）→ 与考研词书一致的 senses 结构 [[pos, [释义]]]；s 按行解析，行首词性/域标记为 pos */
 function ecdictSenses(entry) {
   if (!entry || !entry.s) return [];
@@ -2371,8 +2410,10 @@ function renderSheetHint() {
 
 function renderSheetResults(query) {
   const q = query.trim();
-  const matches = dictSearch(q);
   if (!q) return renderSheetHint();
+  // 中文输入 → 释义反向查询（英文查询路径不变）
+  if (isChineseQuery(q)) return renderReverseResults(q);
+  const matches = dictSearch(q);
   if (!matches.length) {
     // 考研候选为空 → 异步查 ECDICT 兜底（精确命中显示详情，否则提示未收录）
     const v = q.toLowerCase();
@@ -2404,6 +2445,31 @@ function renderSheetResults(query) {
       <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
     </button>`;
   }).join("");
+}
+
+/** 中文释义反查结果：完全复用既有结果行 UI 与点击链路
+    （.result-row → commitQuery → 详情/读音/生词本/查询次数全功能保留） */
+function renderReverseResults(q) {
+  const matches = reverseSearch(q);
+  if (!matches.length) {
+    sheetBody.innerHTML = `<p class="sheet-hint">没有找到释义包含「${esc(q)}」的单词</p>`;
+    return;
+  }
+  sheetBody.innerHTML =
+    `<p class="sheet-reverse-tip">按中文释义找到 ${matches.length} 个单词</p>` +
+    matches.map((w, i) => {
+      const m = wordMeta(w);
+      return `<button class="result-row" data-word="${esc(w)}" style="animation-delay:${i * 30}ms" type="button">
+        <span class="row-main">
+          <p class="word-line">
+            <span class="word">${m.total ? wordHTML(w, m.total) : esc(w)}</span>
+            <span class="word-phonetic">${esc(phoneticOf(w))}</span>
+          </p>
+          <p class="word-meaning">${esc(briefOf(w))}</p>
+        </span>
+        <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+      </button>`;
+    }).join("");
 }
 
 function renderSheetDetail(word) {
@@ -2481,6 +2547,12 @@ sheetInput.addEventListener("keydown", async (e) => {
   if (e.key !== "Enter") return;
   e.preventDefault();
   const q = sheetInput.value.trim().toLowerCase();
+  // 中文输入 → 反查：回车直接查询匹配度最高的英文词
+  if (isChineseQuery(q)) {
+    const top = reverseSearch(q, 1)[0];
+    if (top) commitQuery(top);
+    return;
+  }
   let target = dictGet(q) ? q : null; // 考研 / ECDICT 已加载
   if (!target) target = (await dictGetAsync(q)) ? q : null; // ECDICT 兜底
   if (!target) target = dictSearch(q, 1)[0]; // 考研候选

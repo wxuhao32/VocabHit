@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#F7F7F8" />
   <title>VocabHit — 考研词汇查询</title>
-  <link rel="stylesheet" href="css/style.css?v=8" />
+  <link rel="stylesheet" href="css/style.css?v=9" />
+  <link rel="stylesheet" href="css/knowledge.css?v=9" />
 </head>
 <body>
 
@@ -222,7 +223,7 @@
           <div class="settings-item">
             <div class="settings-item-label">
               <span>版本</span>
-              <span class="settings-item-value">0.7.15</span>
+              <span class="settings-item-value">0.8.16</span>
             </div>
           </div>
         </div>
@@ -283,7 +284,6 @@
             <path d="M10 3L5 8l5 5"/>
           </svg>
         </button>
-        <h1 class="page-title">Review</h1>
         <button class="page-header-action" id="review-clear" type="button" aria-label="清空复习队列">清空</button>
       </header>
       <!-- 沉浸式顶部进度区：极细进度条 + 轻量计数（JS 控制显隐与宽度） -->
@@ -349,7 +349,7 @@
         <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
           <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
         </svg>
-        <input id="sheet-input" type="text" placeholder="输入单词或短语..." autocomplete="off" />
+        <input id="sheet-input" type="text" placeholder="输入单词查释义 · 输入中文找单词" autocomplete="off" />
         <button class="sheet-close" id="sheet-close" type="button" aria-label="关闭">取消</button>
       </div>
       <div class="sheet-body" id="sheet-body"></div>
@@ -389,6 +389,7 @@
 
   <script src="js/dict.js"></script>
   <script src="js/ecdict.js"></script>
-  <script src="js/app.js?v=12"></script>
+  <script src="js/app.js?v=13"></script>
+  <script src="js/knowledge.js?v=13"></script>
 </body>
 </html>

@@ -54,6 +54,10 @@ public class OverlayService extends Service {
     private static final String CHANNEL_ID = "overlay_search";
     private static final int NOTI_ID = 42;
     public static final String EXTRA_SHOW = "show";
+    /** 应用内阅读页（Knowledge / Repository 来源）选中单词 → 悬浮条自动展开查询 */
+    public static final String EXTRA_QUERY = "query";
+    /** 应用内进入摘取模式/编辑面板 → 收起悬浮条展开态（两种文字交互互不干扰） */
+    public static final String EXTRA_COLLAPSE = "collapse";
 
     private TextToSpeech tts; // 单词读音（系统 TTS）
     private volatile boolean ttsReady = false; // 引擎初始化成功（语言回退后仍可用）
@@ -98,12 +102,44 @@ public class OverlayService extends Service {
         try { ctx.startService(it); } catch (Exception ignored) { }
     }
 
+    /** 请求收起悬浮条展开态（应用内进入摘取模式/编辑面板时）。
+     *  同 requestVisibility：仅服务已运行时下发，绝不凭此启动。 */
+    public static void requestCollapse(Context ctx) {
+        if (!running) return;
+        Intent it = new Intent(ctx, OverlayService.class);
+        it.putExtra(EXTRA_COLLAPSE, true);
+        try { ctx.startService(it); } catch (Exception ignored) { }
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && intent.hasExtra(EXTRA_SHOW)) {
             setShow(intent.getBooleanExtra(EXTRA_SHOW, true));
         }
+        if (intent != null && intent.hasExtra(EXTRA_COLLAPSE)) {
+            main.post(() -> {
+                if (added && webView != null)
+                    webView.evaluateJavascript("window.__back&&window.__back()", null);
+            });
+        }
+        if (intent != null && intent.hasExtra(EXTRA_QUERY)) {
+            final String word = intent.getStringExtra(EXTRA_QUERY);
+            if (word != null && !word.trim().isEmpty()) injectQuery(word.trim(), 0);
+        }
         return START_STICKY;
+    }
+
+    /** 向悬浮条页面注入查询指令。页面可能仍在加载（服务冷启动后立即选中查词）：
+     *  注入结果回显 "1" 表示已执行；否则 400ms 后重试（最多 5 次），页面就绪后自然命中。 */
+    private void injectQuery(final String word, final int attempt) {
+        main.post(() -> {
+            if (webView == null) return;
+            final String js = "window.__query?window.__query(" + org.json.JSONObject.quote(word) + "):0";
+            webView.evaluateJavascript(js, value -> {
+                if (!"1".equals(value) && attempt < 5 && !hidden)
+                    main.postDelayed(() -> injectQuery(word, attempt + 1), 400);
+            });
+        });
     }
 
     private void setShow(boolean show) {

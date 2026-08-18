@@ -10,8 +10,8 @@ android {
         applicationId "com.wxh.vocabulary"
         minSdk 26
         targetSdk 34
-        versionCode 43
-        versionName "0.7.15"
+        versionCode 60
+        versionName "0.8.16"
     }
 
     buildTypes {
@@ -30,6 +30,10 @@ android {
         abortOnError false
     }
 }
-// 无第三方依赖：WebView 壳 + 本地词典全部位于 assets 中
+// 唯一原生依赖：ML Kit 文字识别（bundled 模型打包进 APK，完全离线运行，
+// 无需 Google Play Services）。中文识别器覆盖中英混排；Latin 识别器对英文
+// 字母/词间空格/标点更准 —— 纯英文页面自动切换 Latin 引擎
 dependencies {
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.0'
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
 }
