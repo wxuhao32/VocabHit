@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id "com.android.application"
 }
 
@@ -10,8 +10,8 @@ android {
         applicationId "com.wxh.vocabulary"
         minSdk 26
         targetSdk 34
-        versionCode 60
-        versionName "0.8.16"
+        versionCode 61
+        versionName "0.8.17"
     }
 
     buildTypes {
@@ -30,10 +30,11 @@ android {
         abortOnError false
     }
 }
-// 唯一原生依赖：ML Kit 文字识别（bundled 模型打包进 APK，完全离线运行，
-// 无需 Google Play Services）。中文识别器覆盖中英混排；Latin 识别器对英文
-// 字母/词间空格/标点更准 —— 纯英文页面自动切换 Latin 引擎
+// 鍞竴鍘熺敓渚濊禆锛歁L Kit 鏂囧瓧璇嗗埆锛坆undled 妯″瀷鎵撳寘杩?APK锛屽畬鍏ㄧ绾胯繍琛岋紝
+// 鏃犻渶 Google Play Services锛夈€備腑鏂囪瘑鍒櫒瑕嗙洊涓嫳娣锋帓锛汱atin 璇嗗埆鍣ㄥ鑻辨枃
+// 瀛楁瘝/璇嶉棿绌烘牸/鏍囩偣鏇村噯 鈥斺€?绾嫳鏂囬〉闈㈣嚜鍔ㄥ垏鎹?Latin 寮曟搸
 dependencies {
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.0'
     implementation 'com.google.mlkit:text-recognition:16.0.0'
 }
+
