@@ -39,7 +39,7 @@ Math Canvas
 
 ## 目录结构
 
-`
+```
 VocabHit/
 ├── index.html                 # 主应用入口
 ├── overlay.html               # 悬浮窗页面
@@ -89,18 +89,18 @@ VocabHit/
 ├── README.md                  # 本文件
 ├── CHANGELOG.md               # 详细更新日志
 └── LICENSE                    # MIT
-`
+```
 
 ## 快速开始
 
 Android Studio（推荐）
-1. 用 Android Studio 打开 ndroid/ 目录
+1. 用 Android Studio 打开 `android/` 目录
 2. 等待 Gradle Sync 完成
 3. 点击 Run 或 Build → Build APK(s)
 
 命令行
 
-`ash
+```bash
 cd android
 
 # Windows
@@ -108,19 +108,20 @@ gradlew.bat assembleDebug
 
 # macOS / Linux
 ./gradlew assembleDebug
-`
+```
 
-构建产物位于 ndroid/app/build/outputs/apk/debug/app-debug.apk。
+构建产物位于 `android/app/build/outputs/apk/debug/app-debug.apk`。
 
 首次构建会下载 Gradle 8.9 + 依赖，请保持网络通畅。
 
 本地 Web 预览（不打包 APK）
 
-`ash
+```bash
 # 任意静态服务器都能跑
 python -m http.server 8080
+
 # 浏览器打开 http://127.0.0.1:8080/
-`
+```
 
 注意：本地预览没有 WebView 桥接（悬浮窗 / 文档解析 / OCR 不可用），仅用于 UI 调试。
 
@@ -170,9 +171,9 @@ A: 当前只发布 Android。iOS 计划中，需要把 WebView 桥接从 Java �
 Q: 怎么贡献？
 
 A: Issue / PR 都欢迎。注意：
-- 提交前跑 	ools/test_*.js / test_*.py 里的相关测试
-- 不要提交 	ools/、uild_log*.txt、preview-*.html、REVIEW_ANALYSIS.md、hub.yaml、APK 等
-- 新增模块请放在 js/<module>/ 下，CSS 镜像到 css/<module>.css
+- 提交前跑 `tools/test_*.js / test_*.py` 里的相关测试
+- 不要提交 `tools/`、`build_log*.txt`、`preview-*.html`、`REVIEW_ANALYSIS.md`、`hub.yaml`、APK 等
+- 新增模块请放在 `js/<module>/` 下，CSS 镜像到 `css/<module>.css`
 
 ## License
 
