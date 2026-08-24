@@ -35,6 +35,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 图片 OCR 解析器（Knowledge 图片导入 · v0.8.9 基线恢复版）。
@@ -91,6 +93,15 @@ public final class OcrParser {
         }, "ocr-parse").start();
     }
 
+    /** 位图 OCR 公开入口（PDF 扫描页逐页识别复用；位图生命周期由调用方管理） */
+    public static String parseBitmapSync(Context ctx, Bitmap page) {
+        try {
+            return runBitmap(ctx.getApplicationContext(), page, false);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static String run(Context ctx, Uri uri) {
         Bitmap bmp;
         try {
@@ -102,7 +113,12 @@ public final class OcrParser {
         } catch (Exception e) {
             return null;
         }
+        return runBitmap(ctx, bmp, true);
+    }
 
+    /** 识别管线主体：中文识别器 → 方向自检 → Latin 重跑 → 结构化布局输出。
+        recycleSrc=true 时负责回收输入位图（内部旋转产生的临时位图总是自行回收） */
+    private static String runBitmap(Context ctx, Bitmap bmp, boolean recycleSrc) {
         List<String> notes = new ArrayList<>();
 
         // —— 中文识别器（中英混排主力）——
@@ -162,7 +178,7 @@ public final class OcrParser {
 
         int imgW = bmp.getWidth(), imgH = bmp.getHeight();
         if (bestBmp != bmp) bestBmp.recycle();
-        bmp.recycle();
+        if (recycleSrc) bmp.recycle();
 
         dumpDebug(ctx, best, imgW, imgH, notes, text);
         return text;
@@ -350,7 +366,7 @@ public final class OcrParser {
             sortByTop(blocks);
             ordered.addAll(blocks);
         }
-        return joinBlocks(ordered, medianH);
+        return joinBlocks(ordered, medianH, pageW);
     }
 
     private static void sortByTop(List<BlockItem> list) {
@@ -435,9 +451,10 @@ public final class OcrParser {
         return splitX;
     }
 
-    /** 块/行 → 文本：行内即 ML Kit 原生行；同块行间 '\n'，跨块按行间距判定
-        段落（>0.6×中位行高 → '\n\n'）或换行；英文行尾连字符断词合并 */
-    private static String joinBlocks(List<BlockItem> ordered, int medianH) {
+    /** 块/行 → 统一文档模型文本：行内即 ML Kit 原生行；同块行间 '\n'，跨块按行间距判定
+        段落（>0.6×中位行高 → '\n\n'）或换行；英文行尾连字符断词合并；
+        每行经 structureLine 结构重建（标题 / 聊天消息发送者 / 列表标记） */
+    private static String joinBlocks(List<BlockItem> ordered, int medianH, int pageW) {
         StringBuilder sb = new StringBuilder();
         LineItem prev = null;
         boolean blockStart = true;
@@ -464,7 +481,7 @@ public final class OcrParser {
                         sb.append('\n');
                     }
                 }
-                sb.append(cur.text);
+                sb.append(structureLine(cur, medianH, pageW));
                 prev = cur;
                 blockStart = false;
             }
@@ -474,6 +491,54 @@ public final class OcrParser {
                 .replaceAll("[ \t]+", " ")
                 .replaceAll(" ?\n ?", "\n")
                 .trim();
+    }
+
+    /* ================= OCR 结构重建（v0.8.18：识别结果 → 统一文档模型） =================
+       在 ML Kit 原生行文本之上识别结构（绝不动文字本身）：
+       - 标题：行高 ≥1.9×中位 → H1；≥1.45× → H2（行宽受限防整行大字正文误判）
+       - 聊天消息：行首「发送者:」→ 回车符 CR（U+000D）消息头（其后正文行由阅读端并入消息块）
+       - 列表：行首项目符号 → \u0008；行首「数字./)」→ \u0009（原文编号交由 ol 渲染） */
+
+    /** 聊天发送者行：User: / Assistant: / ChatGPT: / 我: / 对方: …（尾部内容可为空） */
+    private static final Pattern CHAT_HEAD = Pattern.compile(
+            "^(user|assistant|chatgpt|gpt[- ]?\\d{0,2}|ai|bot|system|me|you|\\u6211|\\u4f60|"
+                    + "\\u5bf9\\u65b9|\\u8001\\u5e08|\\u5b66\\u751f|\\u5ba2\\u670d)\\s*[:\\uff1a]\\s*(.*)$",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+
+    /** 无序列表项目符号行（• · ▪ ‣ ● ○ ◦ -） */
+    private static final Pattern UL_BULLET = Pattern.compile("^[\\u2022\\u00b7\\u25aa\\u2023\\u25cf\\u25cb\\u25e6\\-]\\s+(.+)$");
+
+    /** 有序列表行：数字 + ./)/、 */
+    private static final Pattern OL_NUM = Pattern.compile("^\\d{1,2}[.)\\u3001]\\s+(.+)$");
+
+    private static String structureLine(LineItem li, int medianH, int pageW) {
+        String s = li.text;
+        if (s == null || s.isEmpty()) return s;
+        int h = li.box.height();
+        // 标题：大字号短行（行宽 < 90% 页宽，避免把全宽大字段落误判为标题）
+        if (medianH >= 8 && s.length() <= 60
+                && (pageW <= 0 || li.box.width() < pageW * 9 / 10)) {
+            if (h >= medianH * 19 / 10) return "\u0001" + s;
+            if (h >= medianH * 145 / 100) return "\u0002" + s;
+        }
+        // 聊天消息发送者行（短行防误匹配）
+        if (s.length() <= 80) {
+            Matcher m = CHAT_HEAD.matcher(s);
+            if (m.matches()) {
+                String sender = m.group(1);
+                String rest = m.group(2).trim();
+                // 发送者与内容同在一行 → 拆为消息头 + 正文两行（阅读端自动组成消息块）
+                // 消息头标记 = 回车符 CR（U+000D）；源码不可写反斜杠 u000D 字面形式，
+                // Java 会在词法分析前将其展开为真实回车、割裂字符串字面量（编译报错）
+                return rest.isEmpty() ? "\r" + sender : "\r" + sender + "\n" + rest;
+            }
+        }
+        // 列表标记行：结构化去符号（渲染端提供原生列表样式）
+        Matcher ul = UL_BULLET.matcher(s);
+        if (ul.matches()) return "\u0008" + ul.group(1).trim();
+        Matcher ol = OL_NUM.matcher(s);
+        if (ol.matches()) return "\u0009" + ol.group(1).trim();
+        return s;
     }
 
     private static boolean isLatin(char c) {

@@ -191,6 +191,12 @@ body.kn-selecting .rd-tip { visibility: hidden; }
 
 .kn-add-btn:active { transform: scale(0.95); opacity: 0.9; }
 
+/* 仅微调「新建存储库」「添加科目」「错题详情·编辑」三个按钮的垂直位置，
+   略微下移改善观感；不影响其他按钮（如阅读页「添加知识」），也不改布局与功能。 */
+#lib-add,
+#mis-add-subject,
+#misdet-edit { position: relative; top: 4px; }
+
 .rd-body { max-width: 620px; margin: 0 auto; }
 
 .rd-text {
@@ -842,3 +848,332 @@ mark.kn-kw {
   opacity: 0.35;
   pointer-events: none;
 }
+
+/* ---------- 命名弹窗（新建存储库 / 添加科目，复用 kn-catdel 遮罩） ---------- */
+
+#kn-namedlg-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  margin-top: 6px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  font-size: 14.5px;
+  color: var(--text);
+}
+
+#kn-namedlg-input:focus { outline: none; border-color: var(--accent); }
+
+#kn-namedlg-cancel {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+#kn-namedlg-ok {
+  background: var(--accent);
+  color: #fff;
+}
+
+#kn-namedlg-ok:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* ---------- 存储库一级页面：库卡片（默认库 / 自定义库 / 我的错题 并列） ---------- */
+
+.lib-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 24px;
+}
+
+.lib-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: transform var(--t-fast) ease, border-color var(--t-fast) ease;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.lib-card:active { transform: scale(0.985); border-color: var(--hairline-strong); }
+
+.lib-card-icon {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.lib-card-icon svg { width: 20px; height: 20px; }
+
+.lib-card-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.lib-card-name {
+  font-size: 15.5px;
+  font-weight: 650;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lib-card-sub { font-size: 12.5px; color: var(--text-3); }
+.lib-card .rp-arrow { flex: none; color: var(--text-3); }
+
+/* ---------- 我的错题：错题卡片列表 ---------- */
+
+.mis-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 0 24px;
+}
+
+.mis-card {
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: transform var(--t-fast) ease, border-color var(--t-fast) ease;
+}
+
+.mis-card:active { transform: scale(0.985); border-color: var(--hairline-strong); }
+
+.mis-card-top { margin-bottom: 10px; }
+
+.mis-card-date {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+
+.mis-card-title {
+  margin-top: 3px;
+  font-size: 15px;
+  font-weight: 620;
+  line-height: 1.5;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.mis-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 10px;
+}
+
+.mis-card-thumb {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+}
+
+.mis-card-reason {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+  word-break: break-word;
+}
+
+.mis-card-none { color: var(--text-3); }
+
+/* ---------- 错题详情页 ---------- */
+
+.misdet-body { padding: 4px 0 32px; }
+
+.misdet-meta {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin-bottom: 14px;
+}
+
+.misdet-img {
+  display: block;
+  width: 100%;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  margin-bottom: 6px;
+}
+
+.misdet-label {
+  margin: 16px 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+}
+
+.misdet-text {
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.misdet-del {
+  margin-top: 26px;
+  padding: 9px 18px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline-strong);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-3);
+  transition: all var(--t-fast) ease;
+}
+
+.misdet-del.confirm { color: #FF3B30; border-color: rgba(255, 59, 48, 0.4); background: rgba(255, 59, 48, 0.09); }
+
+/* ---------- 错题编辑面板：图片选择区 ---------- */
+
+.mis-img-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.mis-img-box {
+  flex: none;
+  width: 88px;
+  height: 88px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface-2);
+}
+
+.mis-img-box img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.mis-img-btns {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mis-img-btns .kn-pick-btn { width: 100%; }
+
+.mis-img-del { color: #FF3B30; border-color: rgba(255, 59, 48, 0.35); }
+
+/* ---------- 错题面板：长文展开输入 ----------
+   点输入框右下角「展开」进入全屏大面积编辑；内容与原输入框双向同步，
+   关闭不丢字；不改保存逻辑与数据结构。 */
+
+/* 输入框包装：为右下角「展开」按钮提供定位锚点 */
+.mis-ta-wrap { position: relative; }
+
+.mis-expand-btn {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--text-3);
+  opacity: 0.85;
+  transition: opacity var(--t-fast) ease, color var(--t-fast) ease;
+}
+
+.mis-expand-btn svg { width: 12px; height: 12px; }
+
+.mis-expand-btn:active { opacity: 1; color: var(--accent); }
+
+/* 全屏展开编辑层：尽可能占据可用空间；底部预留输入法高度 */
+.mis-expand-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3050; /* 高于错题面板(90)，与确认弹窗(3000)互不交叠 */
+  background: rgba(0, 0, 0, 0.45);
+  display: none;
+  padding: 14px 14px calc(14px + var(--ime));
+}
+
+.mis-expand-mask.open { display: block; animation: knExpandIn 0.18s ease; }
+
+@keyframes knExpandIn { from { opacity: 0; } to { opacity: 1; } }
+
+.mis-expand {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 16px;
+  padding: 12px 14px calc(12px + var(--sab));
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
+
+.mis-expand-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+}
+
+.mis-expand-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+
+.mis-expand-done {
+  padding: 5px 14px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  transition: transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+}
+
+.mis-expand-done:active { transform: scale(0.97); opacity: 0.9; }
+
+/* 大编辑区：flex 撑满剩余高度，长文一次看更多 */
+.mis-expand-ta {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--text);
+  resize: none;
+}
+
+.mis-expand-ta:focus { outline: none; border-color: var(--accent); }
+.mis-expand-ta::placeholder { color: var(--text-3); }

@@ -29,6 +29,8 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -94,6 +96,7 @@ public class MainActivity extends Activity {
         });
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         setContentView(webView);
+        PDFBoxResourceLoader.init(getApplicationContext()); // PDFBox 字体资源从 APK 加载（PDF 文本层解析前置条件）
         setupEdgeToEdge();
         webView.loadUrl("file:///android_asset/www/index.html");
     }
@@ -517,9 +520,11 @@ public class MainActivity extends Activity {
                 try {
                     Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     it.addCategory(Intent.CATEGORY_OPENABLE);
-                    it.setType("*/*"); // 部分机型对 docx 的 MIME 过滤不可靠，放宽后由解析器嗅探
+                    it.setType("*/*"); // 部分机型对 docx/pdf 的 MIME 过滤不可靠，放宽后由解析器嗅探
                     it.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
                             "text/plain",
+                            "text/markdown",
+                            "application/pdf",
                             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             "application/octet-stream",
                             "application/zip"
@@ -572,6 +577,61 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        /* ---------- 我的错题模块：图片持久化通道（纯新增段） ----------
+           选择/拍摄的图片复制到应用私有目录 filesDir/mistakes/，前端仅存 file:// 路径 ——
+           不依赖系统文档 Uri 的临时读取权限，App 重启后图片仍然有效；
+           结果经 window.__onMistakeImage(path|null) 回传前端 */
+
+        /** 相册选择错题原图（选中后复制持久化） */
+        @JavascriptInterface
+        public void pickMistakeImage() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    it.addCategory(Intent.CATEGORY_OPENABLE);
+                    it.setType("image/*");
+                    startActivityForResult(it, REQ_PICK_MIS_IMG);
+                } catch (Exception e) {
+                    toast("无法打开相册");
+                    emitMistakeImage(null);
+                }
+            });
+        }
+
+        /** 拍摄错题原图（临时文件经 FileProvider 共享，复制持久化后自动清理） */
+        @JavascriptInterface
+        public void captureMistakeImage() {
+            runOnUiThread(() -> {
+                try {
+                    java.io.File dir = new java.io.File(getCacheDir(), "ocr");
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File photo = new java.io.File(dir, "mis_" + System.currentTimeMillis() + ".jpg");
+                    misPhotoUri = androidx.core.content.FileProvider.getUriForFile(
+                            MainActivity.this, getPackageName() + ".fileprovider", photo);
+                    Intent it = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
+                    it.putExtra(android.provider.MediaStore.EXTRA_OUTPUT, misPhotoUri);
+                    it.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivityForResult(it, REQ_TAKE_MIS_IMG);
+                } catch (Exception e) {
+                    toast("无法打开相机");
+                    emitMistakeImage(null);
+                }
+            });
+        }
+
+        /** 删除不再被引用的错题图片（仅接受 mistakes 目录内的文件，其余路径直接忽略） */
+        @JavascriptInterface
+        public void deleteImageFile(final String path) {
+            if (path == null || path.isEmpty()) return;
+            try {
+                String p = path.startsWith("file://") ? path.substring(7) : path;
+                java.io.File f = new java.io.File(p);
+                java.io.File base = new java.io.File(getFilesDir(), "mistakes");
+                if (!f.getCanonicalPath().startsWith(base.getCanonicalPath())) return;
+                if (f.exists()) f.delete();
+            } catch (Exception ignored) { }
+        }
     }
 
     /* ---------- Knowledge 模块：文档/图片解析结果回传（纯新增段，不影响既有导出/权限流程） ---------- */
@@ -579,7 +639,10 @@ public class MainActivity extends Activity {
     private static final int REQ_PICK_DOC = 4101;
     private static final int REQ_PICK_IMG = 4102;
     private static final int REQ_TAKE_PHOTO = 4103;
+    private static final int REQ_PICK_MIS_IMG = 4104;  // 我的错题：相册选图
+    private static final int REQ_TAKE_MIS_IMG = 4105;  // 我的错题：拍照
     private Uri photoUri = null; // 拍照临时文件 URI（OCR 完成后清理）
+    private Uri misPhotoUri = null; // 错题拍照临时文件 URI（复制持久化后清理）
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
@@ -599,6 +662,16 @@ public class MainActivity extends Activity {
                     if (r.ok) {
                         json.put("ok", true).put("text", r.text)
                             .put("name", queryDisplayName(uri));
+                    } else if (DocumentParser.ERR_PDF_SCAN.equals(r.error)) {
+                        // 扫描版/图片型 PDF：文本层为空 → PdfRenderer 渲染位图逐页 OCR
+                        String text = ocrScannedPdf(uri);
+                        if (text == null || text.trim().isEmpty()) {
+                            json.put("ok", false)
+                                .put("error", "OCR_FAILED_PDF");
+                        } else {
+                            json.put("ok", true).put("text", text)
+                                .put("name", queryDisplayName(uri));
+                        }
                     } else {
                         json.put("ok", false).put("error", r.error);
                     }
@@ -639,6 +712,59 @@ public class MainActivity extends Activity {
                 });
             });
         }
+
+        /* 我的错题图片：复制到应用私有目录持久化，再把 file:// 路径回传前端（重启 App 后仍有效） */
+        if (requestCode == REQ_PICK_MIS_IMG || requestCode == REQ_TAKE_MIS_IMG) {
+            final Uri uri;
+            if (requestCode == REQ_PICK_MIS_IMG) {
+                uri = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+            } else { // 拍照：结果写往 misPhotoUri（Intent data 为空）
+                uri = (resultCode == RESULT_OK) ? misPhotoUri : null;
+            }
+            if (uri == null) {
+                emitMistakeImage(null); // 用户取消
+                return;
+            }
+            final Uri srcUri = uri;
+            new Thread(() -> {
+                String saved = null;
+                try {
+                    java.io.File dir = new java.io.File(getFilesDir(), "mistakes");
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File dst = new java.io.File(dir, "mis_" + System.currentTimeMillis() + ".jpg");
+                    java.io.InputStream in = getContentResolver().openInputStream(srcUri);
+                    if (in != null) {
+                        java.io.OutputStream out = new java.io.FileOutputStream(dst);
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                        out.close();
+                        in.close();
+                        saved = "file://" + dst.getAbsolutePath();
+                    }
+                } catch (Exception ignored) { }
+                final String path = saved;
+                runOnUiThread(() -> {
+                    if (requestCode == REQ_TAKE_MIS_IMG) { // 拍照临时文件已复制，用后即删
+                        try {
+                            java.io.File f = new java.io.File(srcUri.getPath());
+                            if (f.exists()) f.delete();
+                        } catch (Exception ignored) { }
+                        misPhotoUri = null;
+                    }
+                    emitMistakeImage(path);
+                });
+            }, "mis-img-copy").start();
+        }
+    }
+
+    /** 错题图片路径注入前端：window.__onMistakeImage('file://…'|null)；null = 取消或复制失败 */
+    private void emitMistakeImage(final String path) {
+        final String js = "window.__onMistakeImage&&window.__onMistakeImage("
+                + (path == null ? "null" : "'" + path.replace("'", "\\'") + "'") + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
     }
 
     /** 图片 OCR 结果注入前端：window.__onImageParsed(json|null)；null = 用户取消 */
@@ -668,6 +794,53 @@ public class MainActivity extends Activity {
         runOnUiThread(() -> {
             if (webView != null) webView.evaluateJavascript(js, null);
         });
+    }
+
+    /* ---------- 扫描版 PDF → OCR（DocumentParser 判定无文本层时才走此链路） ----------
+       PdfRenderer 逐页渲染位图（长边目标 2048px，白底）→ OcrParser.parseBitmapSync
+       （中文识别器 + 方向自检 + Latin 重跑 + 结构重建，与图片导入同一管线）。
+       页数上限 20：扫描版 OCR 逐页同步执行，超出部分诚实告知「仅识别前 N 页」。 */
+
+    private static final int PDF_OCR_PAGE_LIMIT = 20;
+
+    /** @return 结构化文本；null = 渲染/识别全部失败 */
+    private String ocrScannedPdf(Uri uri) {
+        StringBuilder out = new StringBuilder();
+        try (android.os.ParcelFileDescriptor pfd =
+                     getContentResolver().openFileDescriptor(uri, "r")) {
+            if (pfd == null) return null;
+            try (android.graphics.pdf.PdfRenderer renderer =
+                         new android.graphics.pdf.PdfRenderer(pfd)) {
+                int pageCount = renderer.getPageCount();
+                int pages = Math.min(pageCount, PDF_OCR_PAGE_LIMIT);
+                for (int i = 0; i < pages; i++) {
+                    try (android.graphics.pdf.PdfRenderer.Page page = renderer.openPage(i)) {
+                        int w = page.getWidth(), h = page.getHeight();
+                        if (w <= 0 || h <= 0) continue;
+                        double scale = 2048.0 / Math.max(w, h); // 长边目标 2048（ML Kit 最佳区间）
+                        if (scale > 2.5) scale = 2.5;
+                        if (scale < 1.0) scale = 1.0;
+                        Bitmap bmp = Bitmap.createBitmap(
+                                Math.max(1, (int) (w * scale)),
+                                Math.max(1, (int) (h * scale)),
+                                Bitmap.Config.ARGB_8888);
+                        bmp.eraseColor(Color.WHITE); // PDF 页透明区域铺白底，OCR 不吃透明噪点
+                        page.render(bmp, null, null,
+                                android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        String t = OcrParser.parseBitmapSync(this, bmp); // 内部不复用位图，需自行回收
+                        bmp.recycle();
+                        if (t != null && !t.trim().isEmpty()) {
+                            if (out.length() > 0) out.append("\n\n");
+                            out.append(t.trim());
+                        }
+                    }
+                }
+                if (pageCount > pages) out.append("\n\n（仅识别前 ").append(pages).append(" 页）");
+            }
+        } catch (Exception e) {
+            return out.length() == 0 ? null : out.toString();
+        }
+        return out.length() == 0 ? null : out.toString();
     }
 
     private String queryDisplayName(Uri uri) {

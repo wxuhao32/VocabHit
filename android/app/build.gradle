@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     id "com.android.application"
 }
 
@@ -10,8 +10,8 @@ android {
         applicationId "com.wxh.vocabulary"
         minSdk 26
         targetSdk 34
-        versionCode 61
-        versionName "0.8.17"
+        versionCode 75
+        versionName "1.0.2"
     }
 
     buildTypes {
@@ -36,5 +36,7 @@ android {
 dependencies {
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.0'
     implementation 'com.google.mlkit:text-recognition:16.0.0'
+    // PDF 文本层解析（pdfbox-android：字符级坐标提取，供双栏/表格/标题结构重建）
+    implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
 }
 

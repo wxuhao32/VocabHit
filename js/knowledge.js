@@ -34,6 +34,7 @@
   const MATERIALS_KEY = "vc-materials"; // 学习资料（解析后的纯文本）
   const REPO_KEY = "vc-repo";           // Repository 知识条目（长期知识资产）
   const HIGHLIGHTS_KEY = "vc-highlights"; // 划重点（按资料持久化）
+  const MISTAKES_KEY = "vc-mistakes"; // 我的错题：科目 + 错题（图片以设备文件持久化，此处仅存路径）
 
   const PRESET_CATS = [
     { id: "phrase", name: "短语" },
@@ -42,11 +43,18 @@
   ];
 
   let materials = { v: 1, items: [] }; // items: {id,title,text,addedAt}
-  let repo = { v: 1, customCats: [], entries: [], hiddenPresetCats: [] }; // hiddenPresetCats：已删除的预设类型 id（持久隐藏，重启不复活）
-  // entries: {id,content,explanation,context,catId,
+  // v2：存储库架构 —— libraries 为一级分类，entries/customCats/hiddenPresetCats 均按 libraryId 隔离
+  let repo = { v: 2, libraries: [{ id: "default", name: "默认库", createdAt: Date.now() }], customCats: [], entries: [], hiddenPresetCats: { default: [] } };
+  // entries: {id,content,explanation,context,catId,libraryId,
   //           sources:[{materialId,title,paraIndex,at}],createdAt,lastAt}
   // explanation / context 均可为空串（用户未添加则不渲染）
+  let mistakes = { v: 1, subjects: [], items: [] };
+  // subjects: {id,name,createdAt}
+  // items: {id,subjectId,createdAt,image,questionText,correctAnswer,mistakeReason,solutionIdea}
+  // image 为设备文件路径（file://…）或 Web 回退 dataURL，空串 = 纯文字错题
   let highlights = {}; // { materialId: [{paraIndex, start, end}] } v0.8.16 前旧格式 {paraIndex,text} 渲染时自动迁移
+
+  let activeLibraryId = "default"; // 当前 Repository 页所属存储库（添加知识共用此上下文，缺省即默认库）
 
   function loadStores() {
     try {
@@ -55,17 +63,75 @@
     } catch (e) { /* 损坏则重建 */ }
     try {
       const r = JSON.parse(localStorage.getItem(REPO_KEY));
-      if (r && r.v === 1) repo = r;
+      if (r && (r.v === 1 || r.v === 2)) repo = r;
     } catch (e) { /* 损坏则重建 */ }
     try {
       const h = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY));
       if (h) highlights = h;
     } catch (e) { /* 损坏则重建 */ }
+    try {
+      const ms = JSON.parse(localStorage.getItem(MISTAKES_KEY));
+      if (ms && ms.v === 1) mistakes = ms;
+    } catch (e) { /* 损坏则重建 */ }
+    migrateRepoToLibraries(); // v0.9.0：旧版 Repository 数据自动归入「默认库」，无任何丢失
+    migrateCustomLibsNoPreset(); // v0.9.1：预设类型仅属于默认库，自定义库存量引用自动转为同名自定义类型
+  }
+
+  /** v1→v2 迁移：既有全部条目/自定义类型/预设类型删除记录归属「默认库」（幂等，可重复执行） */
+  function migrateRepoToLibraries() {
+    if (!Array.isArray(repo.libraries) || !repo.libraries.length) {
+      repo.libraries = [{ id: "default", name: "默认库", createdAt: Date.now() }];
+      repo.customCats = (repo.customCats || []).map((c) =>
+        c.libraryId ? c : Object.assign({}, c, { libraryId: "default" }));
+      repo.entries = (repo.entries || []).map((e) =>
+        e.libraryId ? e : Object.assign({}, e, { libraryId: "default" }));
+      repo.v = 2;
+    }
+    // hiddenPresetCats：旧版为数组（全局）→ 新版按库隔离的映射
+    if (!repo.hiddenPresetCats || Array.isArray(repo.hiddenPresetCats)) {
+      repo.hiddenPresetCats = { default: Array.isArray(repo.hiddenPresetCats) ? repo.hiddenPresetCats : [] };
+    }
+    saveRepo();
+  }
+
+  /** v0.9.1 迁移：预设类型仅属于默认库 —— 自定义库中引用预设类型的存量条目转为该库同名自定义类型（幂等，零丢失） */
+  function migrateCustomLibsNoPreset() {
+    const presetIds = PRESET_CATS.map((c) => c.id);
+    let changed = false;
+    repo.libraries.forEach((lib) => {
+      if (lib.id === "default") return;
+      repo.entries.forEach((e) => {
+        if (e.libraryId !== lib.id || presetIds.indexOf(e.catId) === -1) return;
+        const preset = PRESET_CATS.find((c) => c.id === e.catId);
+        let cat = repo.customCats.find((c) => c.libraryId === lib.id && c.name === preset.name);
+        if (!cat) {
+          cat = { id: uid("c"), name: preset.name, libraryId: lib.id, createdAt: Date.now() };
+          repo.customCats.push(cat);
+        }
+        e.catId = cat.id;
+        changed = true;
+      });
+    });
+    if (changed) saveRepo();
   }
 
   function saveMaterials() { localStorage.setItem(MATERIALS_KEY, JSON.stringify(materials)); }
   function saveRepo() { localStorage.setItem(REPO_KEY, JSON.stringify(repo)); }
   function saveHighlights() { localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(highlights)); }
+  function saveMistakes() { localStorage.setItem(MISTAKES_KEY, JSON.stringify(mistakes)); }
+
+  /* ---------- 存储库（一级分类）辅助 ---------- */
+
+  function libById(id) { return repo.libraries.find((l) => l.id === id); }
+  function libName(id) { const l = libById(id); return l ? l.name : "未知库"; }
+  function entriesOfLibrary(libId) { return repo.entries.filter((e) => e.libraryId === libId); }
+  /** 某库的类型数（预设仅属于默认库 + 该库自定义；自定义库为空，类型完全由用户新增） */
+  function catsOfLibrary(libId) {
+    const presetCount = libId === "default"
+      ? PRESET_CATS.filter((c) => ((repo.hiddenPresetCats || {})[libId] || []).indexOf(c.id) === -1).length
+      : 0;
+    return presetCount + repo.customCats.filter((c) => c.libraryId === libId).length;
+  }
 
   function uid(prefix) {
     return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -81,9 +147,12 @@
     return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日 " + p(d.getHours()) + ":" + p(d.getMinutes());
   }
 
+  /** 当前库可用类型：预设（短语/句型/好句）仅属于默认库；自定义库为空，类型完全由用户新增 */
   function allCats() {
-    return PRESET_CATS.filter((c) => (repo.hiddenPresetCats || []).indexOf(c.id) === -1)
-      .concat(repo.customCats);
+    const presets = activeLibraryId === "default"
+      ? PRESET_CATS.filter((c) => ((repo.hiddenPresetCats || {}).default || []).indexOf(c.id) === -1)
+      : [];
+    return presets.concat(repo.customCats.filter((c) => c.libraryId === activeLibraryId));
   }
 
   function catName(id) {
@@ -254,6 +323,8 @@
   const SEARCH_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="7" cy="7" r="4.2"/><path d="M10.4 10.4L14 14"/></svg>';
   const BOOK_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H16v13H6.5A2.5 2.5 0 0 0 4 18.5z"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H16"/></svg>';
   const LAYER_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3l6.5 3.5L10 10 3.5 6.5z"/><path d="M4.2 10.4L10 13.5l5.8-3.1"/><path d="M4.2 13.9L10 17l5.8-3.1"/></svg>';
+  const MISTAKE_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h8.5L16 5.5V17H5z"/><path d="M8 8.5l4 4M12 8.5l-4 4"/></svg>';
+  const EXPAND_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/></svg>';
 
   function injectShell() {
     // 首页入口（复用既有 .review-entry 视觉，插在「坚持看板」之后）
@@ -271,8 +342,8 @@
         <button class="review-entry" id="repo-entry" type="button">
           <span class="review-entry-icon">${LAYER_SVG}</span>
           <span class="review-entry-main">
-            <span class="review-entry-title">Repository</span>
-            <span class="review-entry-sub" id="repo-entry-sub">知识条目 · 0 条</span>
+            <span class="review-entry-title">存储库</span>
+            <span class="review-entry-sub" id="repo-entry-sub">知识库 · 错题本</span>
           </span>
           <svg class="icon icon-s review-entry-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
         </button>`);
@@ -316,7 +387,7 @@
       <main class="page" id="page-repo">
         <header class="page-header">
           <button class="back-btn" id="rp-back" type="button" aria-label="返回">${BACK_SVG}</button>
-          <h1 class="page-title">Repository</h1>
+          <h1 class="page-title" id="rp-title">Repository</h1>
           <button class="kn-add-btn" id="rp-add" type="button">＋ 添加知识</button>
         </header>
         <div class="rp-search">
@@ -402,6 +473,111 @@
               <span class="kn-import-desc">拍摄书本 / 试卷 · 直接识别</span>
             </span>
           </button>
+        </div>
+      </div>
+
+      <!-- 存储库（Repository 上级页：默认库 / 自定义库 / 我的错题） -->
+      <main class="page" id="page-libraries">
+        <header class="page-header">
+          <button class="back-btn" id="lib-back" type="button" aria-label="返回">${BACK_SVG}</button>
+          <h1 class="page-title">存储库</h1>
+          <button class="kn-add-btn" id="lib-add" type="button">＋ 新建存储库</button>
+        </header>
+        <p class="page-subtitle" id="lib-count"></p>
+        <div class="lib-list" id="lib-list"></div>
+      </main>
+
+      <!-- 我的错题：科目列表 -->
+      <main class="page" id="page-mistakes">
+        <header class="page-header">
+          <button class="back-btn" id="mis-back" type="button" aria-label="返回">${BACK_SVG}</button>
+          <h1 class="page-title">我的错题</h1>
+          <button class="kn-add-btn" id="mis-add-subject" type="button">＋ 添加科目</button>
+        </header>
+        <p class="page-subtitle" id="mis-count"></p>
+        <div class="lib-list" id="mis-subjects"></div>
+        <div class="kn-empty" id="mis-empty" hidden>
+          <p>还没有科目</p>
+          <p class="kn-empty-sub">点右上「＋ 添加科目」创建，如：数学 / 英语 / 机械原理</p>
+        </div>
+      </main>
+
+      <!-- 某科目的错题列表 -->
+      <main class="page" id="page-mistake-subject">
+        <header class="page-header">
+          <button class="back-btn" id="missub-back" type="button" aria-label="返回">${BACK_SVG}</button>
+          <h1 class="page-title" id="missub-title">科目</h1>
+          <button class="kn-add-btn" id="missub-add" type="button">＋ 添加错题</button>
+        </header>
+        <p class="page-subtitle" id="missub-count"></p>
+        <div class="mis-list" id="missub-list"></div>
+        <div class="kn-empty" id="missub-empty" hidden>
+          <p>暂无错题</p>
+          <p class="kn-empty-sub">点右上「＋ 添加错题」，可传原图或文字录入</p>
+        </div>
+      </main>
+
+      <!-- 错题详情（完整字段展示 + 编辑/删除） -->
+      <main class="page" id="page-mistake-detail">
+        <header class="page-header">
+          <button class="back-btn" id="misdet-back" type="button" aria-label="返回">${BACK_SVG}</button>
+          <h1 class="page-title">错题详情</h1>
+          <button class="kn-add-btn" id="misdet-edit" type="button">编辑</button>
+        </header>
+        <div class="misdet-body" id="misdet-body"></div>
+      </main>
+
+      <!-- 错题编辑 Bottom Sheet（新增/编辑共用） -->
+      <div class="sheet-overlay" id="mis-overlay" aria-hidden="true"></div>
+      <div class="sheet kn-sheet" id="mis-sheet" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="sheet-grabber"></div>
+        <div class="kn-sheet-head">
+          <p class="kn-sheet-title" id="mis-sheet-title">添加错题</p>
+          <button class="kn-sheet-cancel" id="mis-sheet-cancel" type="button">取消</button>
+        </div>
+        <div class="kn-sheet-body">
+          <p class="field-label">错题原图 · 可选</p>
+          <div class="mis-img-row">
+            <div class="mis-img-box" id="mis-img-box" hidden><img id="mis-img-preview" alt="错题原图" /></div>
+            <div class="mis-img-btns">
+              <button class="kn-pick-btn" id="mis-pick-gallery" type="button">${IMG_SVG} 相册选择</button>
+              <button class="kn-pick-btn" id="mis-pick-camera" type="button">${CAM_SVG} 拍照</button>
+              <button class="kn-pick-btn mis-img-del" id="mis-img-remove" type="button" hidden>移除图片</button>
+            </div>
+          </div>
+          <p class="field-label kn-field-gap">错题文字 · 可选（与图片至少填一项）</p>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="mis-question" rows="3" placeholder="题目内容，可直接输入或留空（仅存原图）"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="mis-question" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
+          <p class="field-label kn-field-gap">正确解答 · 可选</p>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="mis-answer" rows="3" placeholder="正确的解题过程"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="mis-answer" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
+          <p class="field-label kn-field-gap">错因 · 可选</p>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="mis-reason" rows="2" placeholder="如：粗心 / 公式记错 / 审题错误"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="mis-reason" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
+          <p class="field-label kn-field-gap">思路 · 可选</p>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="mis-idea" rows="2" placeholder="这类题应该怎么想，以后从哪里入手"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="mis-idea" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
+          <button class="primary-btn" id="mis-save" type="button">保存错题</button>
+        </div>
+      </div>
+      <input type="file" id="mis-file" accept="image/*" hidden />
+
+      <!-- 错题长文展开输入层：独立大面积编辑区，关闭时内容回写对应输入框 -->
+      <div class="mis-expand-mask" id="mis-expand-mask" aria-hidden="true">
+        <div class="mis-expand" role="dialog" aria-modal="true">
+          <div class="mis-expand-head">
+            <p class="mis-expand-title" id="mis-expand-title"></p>
+            <button class="mis-expand-done" id="mis-expand-done" type="button">完成</button>
+          </div>
+          <textarea class="mis-expand-ta" id="mis-expand-ta"></textarea>
         </div>
       </div>
     `);
@@ -1079,7 +1255,7 @@
     $("#kn-content").value = draft.content || "";
     $("#kn-explain").value = draft.explanation || "";
     $("#kn-context").value = draft.context || "";
-    $("#kn-newcat").hidden = true;
+    $("#kn-newcat").hidden = allCats().length > 0; // 空类型库（如新建的自定义库）直接展开「＋ 自定义」输入
     $("#kn-newcat-input").value = "";
     renderEditorCats();
     $("#kn-overlay").classList.add("visible");
@@ -1119,7 +1295,7 @@
     const n = String(name || "").trim();
     if (!n) { showToast("请输入分类名称"); return false; }
     if (allCats().some((c) => c.name === n)) { showToast("已存在同名分类"); return false; }
-    const cat = { id: uid("c"), name: n, createdAt: Date.now() };
+    const cat = { id: uid("c"), name: n, createdAt: Date.now(), libraryId: activeLibraryId };
     repo.customCats.push(cat);
     saveRepo();
     editorState.catId = cat.id;
@@ -1133,6 +1309,12 @@
     if (!draft) return;
     const content = draft.content;
     if (!content || !content.trim()) { showToast("核心内容不能为空"); return; }
+    if (!allCats().some((c) => c.id === editorState.catId)) {
+      showToast("请先创建词条类型"); // 空类型库（如新建的自定义库）须先新增类型再保存
+      $("#kn-newcat").hidden = false;
+      $("#kn-newcat-input").focus();
+      return;
+    }
     const explanation = draft.explanation || "";
     const context = draft.context || "";
     const catId = editorState.catId;
@@ -1143,6 +1325,7 @@
       at: Date.now()
     };
     const dup = repo.entries.find((e) =>
+      e.libraryId === activeLibraryId &&
       e.catId === catId && normText(e.content) === normText(content));
 
     if (dup) {
@@ -1161,12 +1344,13 @@
         explanation: explanation, // 可为空：详情区不渲染
         context: context,         // 可为空：详情区不渲染
         catId: catId,
+        libraryId: activeLibraryId, // 归属当前存储库（缺省即默认库）
         sources: draft.isManual ? [] : [src],
         createdAt: src.at,
         lastAt: src.at
       });
       saveRepo();
-      showToast("已加入 Repository · " + catName(catId));
+      showToast("已加入「" + libName(activeLibraryId) + "」 · " + catName(catId));
     }
     closeEditor();
     updateHomeBadges();
@@ -1206,12 +1390,14 @@
     $("#rp-chips").innerHTML = chips.map((c) =>
       `<button class="kn-cat${c.id === repoFilter ? " on" : ""}" data-rpcat="${c.id}" type="button">${esc(c.name)}</button>`
     ).join("");
+    $("#rp-title").textContent = libName(activeLibraryId); // 标题 = 当前存储库名
 
-    // 筛选管线：Repository → 当前选中类型 → 关键词/时间条件 → 结果
+    // 筛选管线：存储库 → 当前选中类型 → 关键词/时间条件 → 结果（库间数据严格隔离）
+    const libEntries = entriesOfLibrary(activeLibraryId);
     const kw = repoSearchKw.trim().toLowerCase();
     const byCat = repoFilter === "all"
-      ? repo.entries
-      : repo.entries.filter((e) => e.catId === repoFilter);
+      ? libEntries
+      : libEntries.filter((e) => e.catId === repoFilter);
     const list = kw ? byCat.filter((e) => entrySearchText(e).indexOf(kw) !== -1) : byCat;
 
     const catLabel = repoFilter === "all" ? "全部" : catName(repoFilter);
@@ -1220,7 +1406,7 @@
 
     $("#rp-count").textContent = kw
       ? catLabel + " · 匹配 " + list.length + " / " + byCat.length + " 条"
-      : repo.entries.length + " 条知识条目" +
+      : libEntries.length + " 条知识条目" +
         (repoFilter === "all" ? "" : " · " + catLabel + " " + list.length + " 条");
 
     $("#rp-empty").hidden = list.length !== 0;
@@ -1280,7 +1466,8 @@
   function confirmDeleteCat(catId) {
     const cat = allCats().find((c) => c.id === catId);
     if (!cat) return;
-    const n = repo.entries.filter((e) => e.catId === catId).length;
+    // 统计严格限定「当前库 + 该类型」：不同库的同名类型互不串联
+    const n = repo.entries.filter((e) => e.catId === catId && e.libraryId === activeLibraryId).length;
     const old = document.getElementById("kn-catdel-mask");
     if (old) old.remove();
     const mask = document.createElement("div");
@@ -1319,15 +1506,17 @@
   function deleteCategory(catId) {
     const cat = allCats().find((c) => c.id === catId);
     if (!cat) return;
-    const n = repo.entries.filter((e) => e.catId === catId).length;
-    // 预设类型为代码常量 → 记入 hiddenPresetCats 持久隐藏；自定义类型直接删
+    const n = repo.entries.filter((e) => e.catId === catId && e.libraryId === activeLibraryId).length;
+    // 预设类型为代码常量 → 记入当前库的 hiddenPresetCats 持久隐藏；自定义类型直接删
     if (PRESET_CATS.some((c) => c.id === catId)) {
-      if (!repo.hiddenPresetCats) repo.hiddenPresetCats = [];
-      if (repo.hiddenPresetCats.indexOf(catId) === -1) repo.hiddenPresetCats.push(catId);
+      if (!repo.hiddenPresetCats) repo.hiddenPresetCats = {};
+      if (!repo.hiddenPresetCats[activeLibraryId]) repo.hiddenPresetCats[activeLibraryId] = [];
+      if (repo.hiddenPresetCats[activeLibraryId].indexOf(catId) === -1)
+        repo.hiddenPresetCats[activeLibraryId].push(catId);
     } else {
       repo.customCats = repo.customCats.filter((c) => c.id !== catId);
     }
-    repo.entries = repo.entries.filter((e) => e.catId !== catId);
+    repo.entries = repo.entries.filter((e) => e.catId !== catId || e.libraryId !== activeLibraryId); // 只删当前库该类型，其他库同名类型及其数据不受影响
     if (repoFilter === catId) repoFilter = "all";
     if (editorState.catId === catId) {
       const first = allCats()[0];
@@ -1344,7 +1533,8 @@
 
   function updateHomeBadges() {
     $("#kn-entry-sub").textContent = "学习资料 · " + materials.items.length + " 份";
-    $("#repo-entry-sub").textContent = "知识条目 · " + repo.entries.length + " 条";
+    $("#repo-entry-sub").textContent = repo.libraries.length + " 个库 · 知识 " +
+      repo.entries.length + " 条 · 错题 " + mistakes.items.length + " 道";
   }
 
   function activePageId() {
@@ -1358,9 +1548,20 @@
     switchTab("knowledge");
   }
 
-  function openRepoPage() {
+  /** 一级入口：存储库页面（默认库 / 自定义库 / 我的错题 并列） */
+  function openLibraries() {
     exitReader();
-    // 重新进入 Repository：清空搜索，避免残留筛选状态（分类保持既有选择）
+    renderLibraries();
+    switchTab("libraries");
+  }
+
+  /** 进入指定库的原 Repository 页面（内部逻辑完全复用既有实现，仅按 libraryId 隔离数据） */
+  function openRepoLibrary(libId) {
+    if (!libById(libId)) return;
+    exitReader();
+    activeLibraryId = libId;
+    // 跨库进入：类型筛选/搜索属于上一个库的上下文，一律重置
+    repoFilter = "all";
     repoSearchKw = "";
     const inp = $("#rp-search-input");
     if (inp) inp.value = "";
@@ -1368,16 +1569,447 @@
     switchTab("repo");
   }
 
+  /* ================= 存储库一级页面：库列表 + 新建库 ================= */
+
+  function renderLibraries() {
+    $("#lib-count").textContent = repo.libraries.length + " 个知识库 · 共 " +
+      repo.entries.length + " 条知识条目 · 长按库卡片可重命名";
+    const libCards = repo.libraries.map((l) => `
+      <div class="lib-card" data-lib="${l.id}">
+        <span class="lib-card-icon">${LAYER_SVG}</span>
+        <span class="lib-card-main">
+          <span class="lib-card-name">${esc(l.name)}</span>
+          <span class="lib-card-sub">${catsOfLibrary(l.id)} 个类型 · ${entriesOfLibrary(l.id).length} 条知识</span>
+        </span>
+        ${CHEV_SVG}
+      </div>`).join("");
+    // 「我的错题」与各知识库并列的一级入口（独立学习模块，不是 Repository 类型）
+    const misCard = `
+      <div class="lib-card lib-card-mis" data-mistakes>
+        <span class="lib-card-icon">${MISTAKE_SVG}</span>
+        <span class="lib-card-main">
+          <span class="lib-card-name">我的错题</span>
+          <span class="lib-card-sub">${mistakes.subjects.length} 个科目 · ${mistakes.items.length} 道错题</span>
+        </span>
+        ${CHEV_SVG}
+      </div>`;
+    $("#lib-list").innerHTML = libCards + misCard;
+  }
+
+  /** 轻量命名弹窗（复用类型删除确认的遮罩样式）：非空且不重名才可确认 */
+  function showNameDialog(opts) {
+    const old = document.getElementById("kn-namedlg-mask");
+    if (old) old.remove();
+    const mask = document.createElement("div");
+    mask.id = "kn-namedlg-mask";
+    mask.className = "kn-catdel-mask";
+    mask.innerHTML = `
+      <div class="kn-catdel" role="dialog" aria-modal="true">
+        <p class="kn-catdel-title">${esc(opts.title)}</p>
+        ${opts.tip ? '<p class="kn-catdel-text">' + esc(opts.tip) + "</p>" : ""}
+        <input id="kn-namedlg-input" type="text" autocomplete="off" maxlength="16" placeholder="${esc(opts.placeholder || "")}" value="${esc(opts.value || "")}" />
+        <div class="kn-catdel-btns">
+          <button id="kn-namedlg-cancel" type="button">取消</button>
+          <button id="kn-namedlg-ok" type="button" disabled>${esc(opts.okText || "确定")}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const input = mask.querySelector("#kn-namedlg-input");
+    const okBtn = mask.querySelector("#kn-namedlg-ok");
+    const close = () => mask.remove();
+    mask.addEventListener("click", (e) => { if (e.target === mask) close(); });
+    mask.querySelector("#kn-namedlg-cancel").addEventListener("click", close);
+    const validate = () => {
+      const n = input.value.trim();
+      okBtn.disabled = !n || (opts.exists && opts.exists(n));
+    };
+    input.addEventListener("input", validate);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !okBtn.disabled) { e.preventDefault(); okBtn.click(); }
+    });
+    validate(); // 预填名称（重命名场景）且合法时直接激活确认键
+    okBtn.addEventListener("click", () => {
+      if (okBtn.disabled) return;
+      const n = input.value.trim();
+      close();
+      opts.onOk(n);
+    });
+    setTimeout(() => { try { input.focus(); } catch (e) { /* 部分内核受限 */ } }, 50);
+  }
+
+  /** 新建存储库：各库相互独立，数据按 libraryId 严格隔离 */
+  function createLibrary() {
+    showNameDialog({
+      title: "新建存储库",
+      tip: "每个存储库相互独立，库与库之间的数据不会混在一起",
+      placeholder: "如：考研英语 / 高等数学 / 专业课",
+      okText: "创建",
+      exists: (n) => repo.libraries.some((l) => l.name === n),
+      onOk: (n) => {
+        repo.libraries.push({ id: uid("L"), name: n, createdAt: Date.now() });
+        saveRepo();
+        renderLibraries();
+        updateHomeBadges();
+        showToast("已创建存储库「" + n + "」");
+      }
+    });
+  }
+
+  /** 重命名存储库：仅修改名称，库内类型与知识条目等所有数据不受影响 */
+  function renameLibrary(libId) {
+    const lib = libById(libId);
+    if (!lib) return;
+    showNameDialog({
+      title: "重命名存储库",
+      tip: "仅修改名称，库内类型与知识条目不受影响",
+      value: lib.name,
+      placeholder: "输入新的存储库名称",
+      okText: "保存",
+      exists: (n) => n !== lib.name && repo.libraries.some((l) => l.name === n),
+      onOk: (n) => {
+        lib.name = n;
+        saveRepo();
+        renderLibraries();
+        if (activeLibraryId === libId && activePageId() === "page-repo") renderRepo(); // 正在浏览该库 → 标题同步
+        showToast("已重命名为「" + n + "」");
+      }
+    });
+  }
+
+  /* ================= 我的错题：科目 / 错题列表 / 详情 / 编辑（与知识库并列的独立模块） =================
+     错题条目：{id,subjectId,createdAt,image,questionText,correctAnswer,mistakeReason,solutionIdea}
+     image 为设备文件路径（file://…，原生复制到应用私有目录，重启不丢）或 Web 回退 dataURL；
+     除 image/questionText 至少一项外，其余字段均可为空 */
+
+  let currentSubjectId = null; // 当前科目（错题列表 / 详情 / 编辑共用）
+  let currentMistakeId = null; // 当前错题详情
+  const misEditor = { open: false, id: null, subjectId: null, image: "", origImage: "" };
+
+  function subjectById(id) { return mistakes.subjects.find((s) => s.id === id); }
+  function mistakeById(id) { return mistakes.items.find((m) => m.id === id); }
+  function itemsOfSubject(sid) { return mistakes.items.filter((m) => m.subjectId === sid); }
+
+  /** MM/DD（错题列表日期简写） */
+  function fmtMD(ts) {
+    const d = new Date(ts);
+    const p = (n) => (n < 10 ? "0" + n : "" + n);
+    return p(d.getMonth() + 1) + "/" + p(d.getDate());
+  }
+
+  /** 首行摘要（列表标题用，不换行不超长） */
+  function firstLine(s) {
+    const l = String(s || "").split("\n")[0].trim();
+    return l.length > 60 ? l.slice(0, 60) + "…" : l;
+  }
+
+  function renderMistakeSubjects() {
+    const subs = mistakes.subjects;
+    $("#mis-count").textContent = subs.length
+      ? subs.length + " 个科目 · 共 " + mistakes.items.length + " 道错题"
+      : "按科目整理你的错题";
+    $("#mis-empty").hidden = subs.length !== 0;
+    $("#mis-subjects").innerHTML = subs.map((s) => `
+      <div class="lib-card" data-sub="${s.id}">
+        <span class="lib-card-icon">${MISTAKE_SVG}</span>
+        <span class="lib-card-main">
+          <span class="lib-card-name">${esc(s.name)}</span>
+          <span class="lib-card-sub">${itemsOfSubject(s.id).length} 道错题</span>
+        </span>
+        ${CHEV_SVG}
+      </div>`).join("");
+  }
+
+  function openMistakes() {
+    renderMistakeSubjects();
+    switchTab("mistakes");
+  }
+
+  function addSubject() {
+    showNameDialog({
+      title: "添加科目",
+      placeholder: "如：数学 / 英语 / 机械原理",
+      okText: "创建",
+      exists: (n) => mistakes.subjects.some((s) => s.name === n),
+      onOk: (n) => {
+        mistakes.subjects.push({ id: uid("s"), name: n, createdAt: Date.now() });
+        saveMistakes();
+        renderMistakeSubjects();
+        updateHomeBadges();
+        showToast("已创建科目「" + n + "」");
+      }
+    });
+  }
+
+  /** 长按科目 → 输入科目名确认删除（连带该科目全部错题与图片文件） */
+  function confirmDeleteSubject(sid) {
+    const s = subjectById(sid);
+    if (!s) return;
+    const n = itemsOfSubject(sid).length;
+    const old = document.getElementById("kn-catdel-mask");
+    if (old) old.remove();
+    const mask = document.createElement("div");
+    mask.id = "kn-catdel-mask";
+    mask.className = "kn-catdel-mask";
+    mask.innerHTML = `
+      <div class="kn-catdel" role="dialog" aria-modal="true">
+        <p class="kn-catdel-title">删除科目</p>
+        <p class="kn-catdel-text">即将删除：<b>【${esc(s.name)}】</b></p>
+        <p class="kn-catdel-text">该科目下有 <b>${n}</b> 道错题。删除后全部错题及其原图将一并永久删除，此操作不可恢复。</p>
+        <p class="kn-catdel-tip">请输入「${esc(s.name)}」以确认删除</p>
+        <input id="kn-catdel-input" type="text" autocomplete="off" placeholder="${esc(s.name)}" />
+        <div class="kn-catdel-btns">
+          <button id="kn-catdel-cancel" type="button">取消</button>
+          <button id="kn-catdel-ok" type="button" disabled>永久删除</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const input = mask.querySelector("#kn-catdel-input");
+    const okBtn = mask.querySelector("#kn-catdel-ok");
+    const close = () => mask.remove();
+    mask.addEventListener("click", (e) => { if (e.target === mask) close(); });
+    mask.querySelector("#kn-catdel-cancel").addEventListener("click", close);
+    input.addEventListener("input", () => { okBtn.disabled = input.value !== s.name; });
+    okBtn.addEventListener("click", () => {
+      if (okBtn.disabled) return;
+      close();
+      deleteSubject(sid);
+    });
+    setTimeout(() => { try { input.focus(); } catch (e) { /* 部分内核受限 */ } }, 50);
+  }
+
+  function deleteSubject(sid) {
+    const s = subjectById(sid);
+    itemsOfSubject(sid).forEach((m) => removeMistakeImageFile(m.image)); // 图片文件不留孤儿
+    mistakes.items = mistakes.items.filter((m) => m.subjectId !== sid);
+    mistakes.subjects = mistakes.subjects.filter((x) => x.id !== sid);
+    saveMistakes();
+    renderMistakeSubjects();
+    updateHomeBadges();
+    showToast("已删除科目「" + (s ? s.name : "") + "」及其全部错题");
+  }
+
+  /** 错题原图为设备文件（file://）时通知原生删除；dataURL/空值静默忽略 */
+  function removeMistakeImageFile(path) {
+    if (!path || path.indexOf("file://") !== 0) return;
+    const b = window.AndroidBridge;
+    if (b && typeof b.deleteImageFile === "function") {
+      try { b.deleteImageFile(path); } catch (e) { /* 桥接异常静默 */ }
+    }
+  }
+
+  function renderMistakeItems() {
+    const s = subjectById(currentSubjectId);
+    if (!s) { openMistakes(); return; }
+    $("#missub-title").textContent = s.name;
+    const items = itemsOfSubject(currentSubjectId);
+    $("#missub-count").textContent = items.length + " 道错题";
+    $("#missub-empty").hidden = items.length !== 0;
+    $("#missub-list").innerHTML = items.map((m) => `
+      <div class="mis-card" data-mis="${m.id}">
+        <div class="mis-card-top">
+          <span class="mis-card-date">${fmtMD(m.createdAt)}</span>
+          <p class="mis-card-title">${m.questionText ? esc(firstLine(m.questionText)) : "错题原图"}</p>
+        </div>
+        <div class="mis-card-row">
+          ${m.image ? '<img class="mis-card-thumb" src="' + esc(m.image) + '" alt="错题原图" />' : ""}
+          <p class="mis-card-reason">${m.mistakeReason
+            ? "错因：" + esc(firstLine(m.mistakeReason))
+            : '<span class="mis-card-none">未记录错因</span>'}</p>
+        </div>
+      </div>`).join("");
+  }
+
+  function openMistakeSubject(sid) {
+    if (!subjectById(sid)) return;
+    currentSubjectId = sid;
+    renderMistakeItems();
+    switchTab("mistake-subject");
+  }
+
+  function renderMistakeDetail() {
+    const m = mistakeById(currentMistakeId);
+    if (!m) { openMistakeSubject(currentSubjectId); return; }
+    const sec = (label, text) => text
+      ? '<p class="misdet-label">' + label + '</p><p class="misdet-text">' +
+        esc(text).replace(/\n/g, "<br>") + "</p>"
+      : ""; // 可选字段为空则整块不渲染
+    $("#misdet-body").innerHTML = `
+      <p class="misdet-meta">上传于 ${fmtCN(m.createdAt)}</p>
+      ${m.image ? '<img class="misdet-img" src="' + esc(m.image) + '" alt="错题原图" />' : ""}
+      ${sec("错题文字", m.questionText)}
+      ${sec("正确解答", m.correctAnswer)}
+      ${sec("错因", m.mistakeReason)}
+      ${sec("思路", m.solutionIdea)}
+      <button class="misdet-del" id="misdet-del" type="button">删除这道错题</button>`;
+  }
+
+  function openMistakeDetail(id) {
+    if (!mistakeById(id)) return;
+    currentMistakeId = id;
+    renderMistakeDetail();
+    switchTab("mistake-detail");
+  }
+
+  function deleteMistake(id) {
+    const m = mistakeById(id);
+    if (!m) return;
+    removeMistakeImageFile(m.image);
+    mistakes.items = mistakes.items.filter((x) => x.id !== id);
+    saveMistakes();
+    updateHomeBadges();
+    showToast("已删除错题");
+  }
+
+  /* ---------- 错题编辑 Bottom Sheet（新增 / 编辑共用，图片选择优先走原生持久化通道） ---------- */
+
+  function openMisSheet(mistakeId) {
+    const m = mistakeId ? mistakeById(mistakeId) : null;
+    misEditor.open = true;
+    misEditor.id = mistakeId || null;
+    misEditor.subjectId = m ? m.subjectId : currentSubjectId;
+    misEditor.image = m ? (m.image || "") : "";
+    misEditor.origImage = misEditor.image;
+    $("#mis-sheet-title").textContent = m ? "编辑错题" : "添加错题";
+    $("#mis-question").value = m ? (m.questionText || "") : "";
+    $("#mis-answer").value = m ? (m.correctAnswer || "") : "";
+    $("#mis-reason").value = m ? (m.mistakeReason || "") : "";
+    $("#mis-idea").value = m ? (m.solutionIdea || "") : "";
+    renderMisImage();
+    $("#mis-overlay").classList.add("visible");
+    $("#mis-sheet").classList.add("open");
+    $("#mis-sheet").setAttribute("aria-hidden", "false");
+  }
+
+  function renderMisImage() {
+    const has = !!misEditor.image;
+    $("#mis-img-box").hidden = !has;
+    $("#mis-img-remove").hidden = !has;
+    if (has) $("#mis-img-preview").src = misEditor.image;
+  }
+
+  /** 关闭面板：discardNew !== false 时回收「新选但未保存」的图片文件，不留孤儿 */
+  function closeMisSheet(discardNew) {
+    if (!misEditor.open) return;
+    closeMisExpand(); // 防御：展开编辑区若开着随面板一并关闭
+    if (discardNew !== false && misEditor.image && misEditor.image !== misEditor.origImage)
+      removeMistakeImageFile(misEditor.image);
+    $("#mis-overlay").classList.remove("visible");
+    $("#mis-sheet").classList.remove("open");
+    $("#mis-sheet").setAttribute("aria-hidden", "true");
+    misEditor.open = false;
+    misEditor.id = null;
+    misEditor.subjectId = null;
+    misEditor.image = "";
+    misEditor.origImage = "";
+  }
+
+  /* ---------- 展开输入：长文大面积编辑（内容与面板对应输入框双向同步） ----------
+     点输入框右下角「展开」→ 全屏独立编辑区；「完成」/点遮罩/返回键均把内容
+     回写原输入框，任何路径关闭都不丢字；保存流程与数据结构完全不变。 */
+
+  const MIS_FIELD_TITLES = {
+    "mis-question": "错题文字",
+    "mis-answer": "正确解答",
+    "mis-reason": "错因",
+    "mis-idea": "思路"
+  };
+  let misExpandSrc = null; // 当前展开来源输入框（null = 未展开）
+
+  function openMisExpand(targetId) {
+    const src = document.getElementById(targetId);
+    if (!src || !misEditor.open || misExpandSrc) return;
+    misExpandSrc = src;
+    $("#mis-expand-title").textContent = MIS_FIELD_TITLES[targetId] || "文字";
+    const ta = $("#mis-expand-ta");
+    ta.value = src.value;            // 原内容完整带入展开区
+    ta.placeholder = src.placeholder;
+    $("#mis-expand-mask").classList.add("open");
+    $("#mis-expand-mask").setAttribute("aria-hidden", "false");
+    setTimeout(() => ta.focus(), 120); // 动画稳定后聚焦，便于直接增删改
+  }
+
+  function closeMisExpand() {
+    if (!misExpandSrc) return;
+    misExpandSrc.value = $("#mis-expand-ta").value; // 改动回写，关闭后内容不丢失
+    misExpandSrc = null;
+    $("#mis-expand-mask").classList.remove("open");
+    $("#mis-expand-mask").setAttribute("aria-hidden", "true");
+  }
+
+  function saveMistake() {
+    const q = $("#mis-question").value.trim();
+    const ans = $("#mis-answer").value.trim();
+    const reason = $("#mis-reason").value.trim();
+    const idea = $("#mis-idea").value.trim();
+    if (!misEditor.image && !q) { showToast("错题原图与错题文字至少填一项"); return; }
+    // 替换图片：旧图不再被引用 → 删除设备文件
+    if (misEditor.origImage && misEditor.origImage !== misEditor.image)
+      removeMistakeImageFile(misEditor.origImage);
+    const editing = !!misEditor.id;
+    if (editing) {
+      const m = mistakeById(misEditor.id);
+      if (m) {
+        m.image = misEditor.image;
+        m.questionText = q;
+        m.correctAnswer = ans;
+        m.mistakeReason = reason;
+        m.solutionIdea = idea;
+      }
+    } else {
+      mistakes.items.unshift({
+        id: uid("x"),
+        subjectId: misEditor.subjectId,
+        createdAt: Date.now(), // 上传时间 = 用户真实添加时刻
+        image: misEditor.image,
+        questionText: q,
+        correctAnswer: ans,
+        mistakeReason: reason,
+        solutionIdea: idea
+      });
+    }
+    saveMistakes();
+    closeMisSheet(false); // 保存成功：新图已被引用，不可回收
+    if (activePageId() === "page-mistake-detail") renderMistakeDetail();
+    else if (activePageId() === "page-mistake-subject") renderMistakeItems();
+    updateHomeBadges();
+    showToast(editing ? "错题已更新" : "已添加错题");
+  }
+
+  /** 错题原图选择：优先原生桥接（图片复制到应用私有目录持久保存，回调返回 file:// 路径）；
+      Web 回退：file 输入框读 dataURL（仅供预览体验） */
+  function pickMistakeImage(mode) {
+    const b = window.AndroidBridge;
+    if (mode === "camera") {
+      if (b && typeof b.captureMistakeImage === "function") { b.captureMistakeImage(); return; }
+    } else {
+      if (b && typeof b.pickMistakeImage === "function") { b.pickMistakeImage(); return; }
+    }
+    const input = $("#mis-file");
+    if (mode === "camera") input.setAttribute("capture", "environment");
+    else input.removeAttribute("capture");
+    input.click();
+  }
+
+  /** 原生回调（MainActivity）：图片已持久化于 filesDir/mistakes/，重启 App 后仍有效 */
+  window.__onMistakeImage = function (path) {
+    if (!misEditor.open || !path) return;
+    // 连续换图：上一张未保存的选择立即回收，不留孤儿文件
+    if (misEditor.image && misEditor.image !== misEditor.origImage)
+      removeMistakeImageFile(misEditor.image);
+    misEditor.image = path;
+    renderMisImage();
+  };
+
   /* ================= 事件绑定（全部为本模块新增元素） ================= */
 
   function bindEvents() {
     // 首页入口
     $("#kn-entry").addEventListener("click", openKnowledge);
-    $("#repo-entry").addEventListener("click", openRepoPage);
+    $("#repo-entry").addEventListener("click", openLibraries); // 存储库一级入口
 
-    // 页面返回（Knowledge / Repository → 首页）
+    // 页面返回（Knowledge → 首页；Repository → 存储库）
     $("#kn-back").addEventListener("click", () => { switchTab("home"); renderAll(); });
-    $("#rp-back").addEventListener("click", () => { switchTab("home"); renderAll(); });
+    $("#rp-back").addEventListener("click", openLibraries);
     // 阅读页返回：统一按 entrySource 返回 Knowledge / Repository（系统返回键/手势同走 backFromReader）
     $("#rd-back").addEventListener("click", () => backFromReader());
 
@@ -1585,6 +2217,135 @@
     document.addEventListener("mouseup", onTextSelectEnd);
     document.addEventListener("touchend", onTextSelectEnd);
 
+    // 存储库一级页面：返回 / 新建库 / 进入某个库 / 长按库卡片重命名 / 进入我的错题
+    $("#lib-back").addEventListener("click", () => { switchTab("home"); renderAll(); });
+    $("#lib-add").addEventListener("click", createLibrary);
+    let libPressTimer = null, libPressFired = false, libPressXY = null;
+    const LIB_PRESS_MS = 600;
+    const cancelLibPress = () => { clearTimeout(libPressTimer); libPressTimer = null; };
+    const libList = $("#lib-list");
+    // 长按库卡片 → 重命名（默认库与自定义库均可；仅改名称，库内数据不受影响）
+    libList.addEventListener("pointerdown", (e) => {
+      const card = e.target.closest("[data-lib]");
+      if (!card) return;
+      libPressFired = false;
+      libPressXY = { x: e.clientX, y: e.clientY };
+      cancelLibPress();
+      libPressTimer = setTimeout(() => {
+        libPressTimer = null;
+        libPressFired = true;
+        try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) { /* 无振动则忽略 */ }
+        renameLibrary(card.dataset.lib);
+      }, LIB_PRESS_MS);
+    });
+    libList.addEventListener("pointermove", (e) => {
+      if (!libPressTimer || !libPressXY) return;
+      if (Math.abs(e.clientX - libPressXY.x) > 10 || Math.abs(e.clientY - libPressXY.y) > 10) {
+        cancelLibPress(); // 手指滑动（滚动意图）→ 取消长按
+      }
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((ev) =>
+      libList.addEventListener(ev, cancelLibPress));
+    libList.addEventListener("contextmenu", (e) => {
+      if (e.target.closest("[data-lib]")) e.preventDefault(); // 长按不弹系统文本菜单
+    });
+    libList.addEventListener("click", (e) => {
+      if (e.target.closest("[data-mistakes]")) { openMistakes(); return; }
+      const card = e.target.closest("[data-lib]");
+      if (!card) return;
+      if (libPressFired) { libPressFired = false; return; } // 长按触发重命名后吞掉本次 click
+      openRepoLibrary(card.dataset.lib);
+    });
+
+    // 我的错题：科目列表（点击进入 / 长按删除）
+    $("#mis-back").addEventListener("click", openLibraries);
+    $("#mis-add-subject").addEventListener("click", addSubject);
+    let subPressTimer = null, subPressFired = false, subPressXY = null;
+    const SUB_PRESS_MS = 600;
+    const cancelSubPress = () => { clearTimeout(subPressTimer); subPressTimer = null; };
+    const misSubs = $("#mis-subjects");
+    misSubs.addEventListener("pointerdown", (e) => {
+      const card = e.target.closest("[data-sub]");
+      if (!card) return;
+      subPressFired = false;
+      subPressXY = { x: e.clientX, y: e.clientY };
+      cancelSubPress();
+      subPressTimer = setTimeout(() => {
+        subPressTimer = null;
+        subPressFired = true;
+        try { if (navigator.vibrate) navigator.vibrate(30); } catch (err) { /* 无振动则忽略 */ }
+        confirmDeleteSubject(card.dataset.sub);
+      }, SUB_PRESS_MS);
+    });
+    misSubs.addEventListener("pointermove", (e) => {
+      if (!subPressTimer || !subPressXY) return;
+      if (Math.abs(e.clientX - subPressXY.x) > 10 || Math.abs(e.clientY - subPressXY.y) > 10) {
+        cancelSubPress(); // 手指滑动（滚动意图）→ 取消长按
+      }
+    });
+    ["pointerup", "pointercancel", "pointerleave"].forEach((ev) =>
+      misSubs.addEventListener(ev, cancelSubPress));
+    misSubs.addEventListener("contextmenu", (e) => {
+      if (e.target.closest("[data-sub]")) e.preventDefault();
+    });
+    misSubs.addEventListener("click", (e) => {
+      const card = e.target.closest("[data-sub]");
+      if (!card) return;
+      if (subPressFired) { subPressFired = false; return; } // 长按触发删除后吞掉本次 click
+      openMistakeSubject(card.dataset.sub);
+    });
+
+    // 某科目错题列表：返回 / 添加 / 进入详情
+    $("#missub-back").addEventListener("click", openMistakes);
+    $("#missub-add").addEventListener("click", () => openMisSheet(null));
+    $("#missub-list").addEventListener("click", (e) => {
+      const card = e.target.closest("[data-mis]");
+      if (card) openMistakeDetail(card.dataset.mis);
+    });
+
+    // 错题详情：返回 / 编辑 / 删除（二次点击确认）
+    $("#misdet-back").addEventListener("click", () => openMistakeSubject(currentSubjectId));
+    $("#misdet-edit").addEventListener("click", () => openMisSheet(currentMistakeId));
+    $("#misdet-body").addEventListener("click", (e) => {
+      const del = e.target.closest("#misdet-del");
+      if (!del) return;
+      if (!del.classList.contains("confirm")) {
+        del.classList.add("confirm");
+        del.textContent = "确认删除";
+        setTimeout(() => { del.classList.remove("confirm"); del.textContent = "删除这道错题"; }, 2600);
+        return;
+      }
+      deleteMistake(currentMistakeId);
+      openMistakeSubject(currentSubjectId);
+    });
+
+    // 错题编辑面板：关闭 / 图片选择 / 保存
+    $("#mis-overlay").addEventListener("click", () => closeMisSheet());
+    $("#mis-sheet-cancel").addEventListener("click", () => closeMisSheet());
+    $("#mis-pick-gallery").addEventListener("click", () => pickMistakeImage("gallery"));
+    $("#mis-pick-camera").addEventListener("click", () => pickMistakeImage("camera"));
+    $("#mis-img-remove").addEventListener("click", () => {
+      misEditor.image = ""; // 仅解除引用；旧图文件在保存/取消时按状态统一回收
+      renderMisImage();
+    });
+    $("#mis-save").addEventListener("click", saveMistake);
+    // 展开输入：对应输入框进入全屏大面积编辑（内容完整保留，关闭时回写）
+    document.querySelectorAll("#mis-sheet .mis-expand-btn").forEach((btn) =>
+      btn.addEventListener("click", () => openMisExpand(btn.dataset.target)));
+    $("#mis-expand-done").addEventListener("click", closeMisExpand);
+    $("#mis-expand-mask").addEventListener("click", (e) => {
+      if (e.target === $("#mis-expand-mask")) closeMisExpand(); // 点遮罩空白处 = 完成
+    });
+    $("#mis-file").addEventListener("change", () => {
+      const input = $("#mis-file");
+      const file = input.files && input.files[0];
+      input.value = "";
+      if (!file || !misEditor.open) return;
+      const reader = new FileReader();
+      reader.onload = () => window.__onMistakeImage(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+
     // 切换主 Tab：彻底清理本模块所有临时状态（追加监听，不改既有处理器）
     document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
       closeEditor();
@@ -1612,12 +2373,22 @@
       return true;
     }
     if (editorState.open) { closeEditor(); return true; }
+    if (misExpandSrc) { closeMisExpand(); return true; } // 错题展开输入：先关大面积编辑再回面板，内容不丢
+    if (misEditor.open) { closeMisSheet(); return true; } // 错题编辑面板：回收未保存的新图
+    // 最上层输入确认弹窗先关闭（类型/科目删除确认、新建库、添加科目）
+    const dlg = document.getElementById("kn-namedlg-mask") || document.getElementById("kn-catdel-mask");
+    if (dlg) { dlg.remove(); return true; }
     const id = activePageId();
     if (id === "page-reader") {
       backFromReader(); // 系统返回键/全面屏手势与左上角按钮同一返回逻辑（按 entrySource）
       return true;
     }
-    if (id === "page-knowledge" || id === "page-repo") {
+    // 页面栈：存储库 → 库(Repository) / 我的错题 → 科目 → 错题详情
+    if (id === "page-repo") { openLibraries(); return true; }
+    if (id === "page-mistake-detail") { openMistakeSubject(currentSubjectId); return true; }
+    if (id === "page-mistake-subject") { openMistakes(); return true; }
+    if (id === "page-mistakes") { openLibraries(); return true; }
+    if (id === "page-knowledge" || id === "page-libraries") {
       switchTab("home");
       renderAll();
       return true;
@@ -1635,11 +2406,13 @@
 
   window.VH_Knowledge = {
     open: openKnowledge,
-    openRepo: openRepoPage,
+    openRepo: openLibraries, // v0.9.0：Repository 上级「存储库」页面
+    openRepoLibrary: openRepoLibrary,
     openReader: openReader,
     registerParser: registerParser,
     get materials() { return materials; },
-    get repo() { return repo; }
+    get repo() { return repo; },
+    get mistakes() { return mistakes; }
   };
 
   /* ================= 初始化 ================= */

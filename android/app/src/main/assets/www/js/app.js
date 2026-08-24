@@ -441,6 +441,19 @@ function ttsStop() {
   ttsStopAudio();
 }
 
+/* ---------- 下一题提示音（「滴」声，用户提供的本地 MP3） ----------
+   仅在词义复习释义确认后 / 拼写正确后点「下一个」进入下一条时播放，
+   每次点击重置到开头播放一次；独立 Audio 通道，与 TTS/在线发音
+   （ttsSpeak/ttsStop，Web Speech + 有道音频）互不影响 */
+const nextSoundRef = new Audio("audio/next.mp3");
+function playNextSound() {
+  try {
+    nextSoundRef.currentTime = 0;
+    const p = nextSoundRef.play();
+    if (p && p.catch) p.catch(() => {}); // 自动播放策略拦截时静默
+  } catch (_) { /* 静默 */ }
+}
+
 function wordHTML(word, count) {
   return `${esc(word)}<sup class="count">${count}</sup>`;
 }
@@ -552,6 +565,7 @@ function clearReviewQueue() {
     step: "answer", lastResult: null, snapshot: null,
     spell: { submitted: false, correct: false, input: "" },
     stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
+    answeredToday: {}, initialCount: 0,
   };
   migrateReview(); // 以生词本为基础重建（按 first 日期安排首次复习）
   renderAll();
@@ -628,15 +642,21 @@ let reviewSession = {
   day: "",
   phase: "meaning",     // "meaning" | "transition" | "spell" | "done"
   // Phase 1
-  queue: [],            // 原始队列顺序
+  queue: [],            // 当天队列（模糊/不认识会被放回队尾追加，长度可增长）
   idx: 0,
   step: "answer",       // "answer" | "detail"
   current: null,
   lastResult: null,
   snapshot: null,
   stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
+  // 当天会话状态（与长期 Review 状态分离）：
+  //   answeredToday —— 已做过「当天首次判断」（长期间隔算法基准已锁定）的词，
+  //                    当天重复出现只决定是否继续排队，绝不再触碰长期算法
+  //   initialCount  —— 当天初始队列长度（过渡/完成页文案基数；重复重排不计入）
+  answeredToday: {},
+  initialCount: 0,
   // Phase 2
-  spellQueue: [],       // 随机打乱后的拼写队列
+  spellQueue: [],       // 随机打乱后的拼写队列（跳过的词放回队尾，直到拼写正确）
   spellIdx: 0,
   spell: { submitted: false, correct: false, input: "" },
   spellStats: { correct: 0, wrong: 0, skipped: 0 },
@@ -668,15 +688,19 @@ function loadReviewSession() {
       // 与生词本同步：过滤掉已删除的词
       s.queue = s.queue.filter((w) => reviewStore.words[w] && isStarred(w));
       if (s.queue.length === 0) return null;
-      
+
       // Phase 1 恢复
       s.idx = Math.min(s.idx || 0, s.queue.length);
       if (!s.stats) s.stats = { n: 0, known: 0, fuzzy: 0, unknown: 0 };
+      // 当天会话字段（旧会话无此字段时兜底：answeredToday 空 = 恢复后按新逻辑继续，
+      // 行为与旧版一致，不会更糟；initialCount 以当前队列长度近似）
+      if (!s.answeredToday || typeof s.answeredToday !== "object") s.answeredToday = {};
+      if (!s.initialCount || s.initialCount < 1) s.initialCount = s.queue.length;
       
       // Phase 2 恢复（如果已进入拼写阶段）
       if (s.phase === "spell" || s.phase === "done") {
         if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
-          s.spellQueue = shuffleArray(s.queue);
+          s.spellQueue = shuffleArray(Array.from(new Set(s.queue))); // 去重（queue 含队末重排重复项）
         }
         s.spellQueue = s.spellQueue.filter((w) => reviewStore.words[w] && isStarred(w));
         s.spellIdx = Math.min(s.spellIdx || 0, s.spellQueue.length);
@@ -694,6 +718,7 @@ function loadReviewSession() {
 function openReview() {
   rolloverIfNeeded();
   renderAll();
+  if (window.VH_STATS) VH_STATS.touch(); // 学习统计：会话开始，重置有效时长计时
   const saved = loadReviewSession();
   
   if (saved) {
@@ -724,6 +749,8 @@ function openReview() {
       lastResult: null,
       snapshot: null,
       stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
+      answeredToday: {},
+      initialCount: queue.length,
       spellQueue: [],
       spellIdx: 0,
       spell: { submitted: false, correct: false, input: "" },
@@ -817,31 +844,32 @@ function rvSenseRows(word) {
   });
 }
 
-/** 屏幕切换动画：旧屏淡出 → 新屏淡入（轻微位移，节奏短促；表现层） */
+/** 屏幕切换动画：翻书换页（从左向右轻翻；表现层）
+    旧屏克隆为「翻出页」（不透明，以左缘为轴向右轻旋揭走），新屏先垫底渲染再旋入就位
+    —— 新屏全程在场，绝无白屏/闪烁；约 280ms，轻微克制（无 3D 卷曲） */
 let rvAnimating = false;
 function rvRender(fn) {
   const body = $("#review-body");
   if (!body || rvAnimating) { fn(); return; }
   const reduced = typeof window.matchMedia === "function"
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const leaveMs = reduced ? 0 : 110;
-  rvAnimating = true;
-  const finish = () => {
-    fn();
-    const next = body.firstElementChild;
-    if (next) {
-      next.classList.add("rv-enter");
-      requestAnimationFrame(() => requestAnimationFrame(() => next.classList.remove("rv-enter")));
-    }
-    rvAnimating = false;
-  };
+  if (reduced) { fn(); return; }
   const cur = body.firstElementChild;
-  if (cur) {
-    cur.classList.add("rv-leave");
-    setTimeout(finish, leaveMs);
-  } else {
-    finish();
-  }
+  if (!cur) { fn(); return; }
+  rvAnimating = true;
+  const flip = cur.cloneNode(true);           // 克隆当前屏作为翻出页
+  flip.classList.add("rv-flip-out");
+  flip.setAttribute("aria-hidden", "true");
+  fn();                                       // 新屏垫底渲染（立刻在场 → 无白屏）
+  try { flip.scrollTop = cur.scrollTop; } catch (_) {} // 保留旧屏滚动位置
+  const next = body.firstElementChild;
+  if (next) next.classList.add("rv-flip-in");
+  body.appendChild(flip);                     // 翻出页盖上，向右轻翻揭走
+  setTimeout(() => {
+    if (flip.parentNode) flip.remove();
+    if (next) next.classList.remove("rv-flip-in");
+    rvAnimating = false;
+  }, 300);
 }
 
 /** Phase 1: 词义复习 - 回忆页（单词舞台中央，顶部进度，底部判断区） */
@@ -880,7 +908,9 @@ function renderMeaning(body) {
     }, 100);
   }, 50);
   
-  // TTS 不自动播放，用户手动点击
+  // 回忆页自动播放一次英语发音（本地 TTS 优先，在线兜底；仅此一次）
+  // 用户答题/离开时立即停止（见 onReviewAnswer / reviewNext / exitReview 的 ttsStop）
+  setTimeout(() => ttsSpeak(word, 1), 120);
 }
 
 /** Phase 1: 词义复习 - 释义确认页（单词头部 → 词性/释义列表 → 底部操作） */
@@ -926,14 +956,16 @@ function renderDetail(body) {
 /** 阶段过渡页 */
 function renderTransition(body) {
   const s = reviewSession.stats;
-  const total = reviewSession.queue.length;
-  
+  const total = reviewSession.initialCount || reviewSession.queue.length;
+  // 队末重排产生的重复判断（总判断次数 - 初始词数）单独标注，不影响词数基数
+  const extra = s.n > total ? `（共判断 ${s.n} 次）` : "";
+
   rvHideProgress();
-  
+
   body.innerHTML = `<div class="rv-transition rv-screen">
     <div class="rv-transition-icon">✓</div>
     <h2 class="rv-transition-title">词义复习完成</h2>
-    <p class="rv-transition-sub">已完成 ${total} 个单词的词义复习<br>接下来进行拼写复习</p>
+    <p class="rv-transition-sub">已完成 ${total} 个单词的词义复习${extra}<br>接下来进行拼写复习</p>
     <div class="rv-transition-stats">
       <div class="rv-transition-stat rv-transition-stat--known">
         <b>${s.known}</b><span>认识</span>
@@ -958,12 +990,9 @@ function renderSpell(body) {
   
   rvSetProgress(reviewSession.spellIdx + 1, total);
   
-  const inputClass = sp.submitted && !sp.correct ? "error"
-                   : sp.submitted && sp.correct ? "success" : "";
-  // 状态化按钮组：未提交 [跳过+确认]；错误 [跳过+重新提交]；正确 [下一个]
-  const actionsHtml = sp.submitted && sp.correct
-    ? `<button class="rv-btn-next" id="spell-next" type="button">下一个</button>`
-    : `<button class="rv-btn-wrong" id="spell-skip" type="button">跳过</button>
+  const inputClass = sp.submitted && !sp.correct ? "error" : "";
+  // 按钮组恒为 [跳过 + 确认/重新提交]：「确认」= 提交并判断，正确时直接进入下一题（无「下一个」中间态）
+  const actionsHtml = `<button class="rv-btn-wrong" id="spell-skip" type="button">跳过</button>
        <button class="rv-btn-next" id="spell-submit" type="button">${sp.submitted && !sp.correct ? "重新提交" : "确认"}</button>`;
   
   body.innerHTML = `<div class="rv-spell rv-screen">
@@ -979,9 +1008,9 @@ function renderSpell(body) {
              autocapitalize="off" 
              spellcheck="false" 
              value="${esc(sp.input)}" />
-      ${sp.submitted ? `<div class="rv-spell-result">
-        <div class="rv-spell-result-word ${sp.correct ? 'correct' : 'wrong'}">${esc(word)}</div>
-        <p class="rv-spell-result-tip">${sp.correct ? "拼写正确" : "正确拼写如上 · 请重新输入"}</p>
+      ${sp.submitted && !sp.correct ? `<div class="rv-spell-result">
+        <div class="rv-spell-result-word wrong">${esc(word)}</div>
+        <p class="rv-spell-result-tip">正确拼写如上 · 请重新输入</p>
       </div>` : ""}
     </div>
     <div class="rv-spell-actions">
@@ -1010,14 +1039,15 @@ function renderSpell(body) {
 function renderDone(body) {
   const s = reviewSession.stats;
   const sp = reviewSession.spellStats;
-  const total = reviewSession.queue.length;
-  
+  const total = reviewSession.initialCount || reviewSession.queue.length;
+  const extra = s.n > total ? ` · 共判断 ${s.n} 次` : "";
+
   rvHideProgress();
-  
+
   body.innerHTML = `<div class="rv-done rv-screen">
     <div class="rv-done-check">✓</div>
     <h2 class="rv-done-title">今日复习完成</h2>
-    <p class="rv-done-sub">共复习 ${total} 个单词</p>
+    <p class="rv-done-sub">共复习 ${total} 个单词${extra}</p>
     
     <div class="rv-done-stats-block">
       <p class="rv-done-section-title">词义复习</p>
@@ -1051,48 +1081,69 @@ function renderDone(body) {
   </div>`;
 }
 
-/** 用户点击判断按钮 */
+/** 用户点击判断按钮。
+    当天首次判断 → 调用长期间隔算法（answerReview），锁定该词今天的间隔基准；
+    当天重复出现（队末重排后再考）→ 绝不再触碰长期算法，只决定是否继续排队 */
 function onReviewAnswer(result) {
+  ttsStop(); // 用户已作答：立即停掉回忆页自动发音（不允许播完）
+  // 学习统计：完成一次生词复习 + 结算本题有效时长（答题间隔，封顶 3 分钟）
+  if (window.VH_STATS) VH_STATS.add({ vocab: 1, sec: VH_STATS.elapsed() });
   const word = reviewSession.current;
-  const st = reviewStore.words[word];
-  
-  // 记录快照用于回滚
-  reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null;
-  
-  // 调用记忆曲线算法
-  answerReview(word, result);
-  
-  // 更新会话状态
+  const firstOfDay = !reviewSession.answeredToday[word];
+
+  if (firstOfDay) {
+    // 首次判断：写入长期 Review 状态（当天间隔算法基准，后续重复判断不可更改）
+    const st = reviewStore.words[word];
+    // 记录快照用于「记错了」回滚
+    reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null;
+    answerReview(word, result);
+    reviewSession.answeredToday[word] = 1;
+  } else {
+    // 重复判断：长期状态已锁定，不回滚、不写入
+    reviewSession.snapshot = null;
+  }
+
+  // 更新会话状态（重复判断同样计入答题统计：当天复习次数可超过单词数）
   reviewSession.lastResult = result;
   reviewSession.step = "detail";
   reviewSession.stats.n += 1;
   reviewSession.stats[result] += 1;
   saveReviewSession();
-  
+
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 记错了：回滚并按不认识处理 */
+/** 记错了：首次判断 → 回滚并按不认识写入长期算法；重复判断 → 仅修正当天判断
+    （长期基准已在首次判断锁定，「记错了」只把词放回队尾继续考） */
 function reviewCorrection() {
   const word = reviewSession.current;
-  if (!reviewSession.snapshot) return;
-  
-  reviewStore.words[word] = reviewSession.snapshot;
-  reviewSession.snapshot = null;
-  answerReview(word, "unknown");
-  
+  if (!reviewSession.snapshot && !reviewSession.answeredToday[word]) return;
+
+  if (reviewSession.snapshot) {
+    // 首次判断的修正：回滚 → 按「不认识」重算（仍属当天首次判断的最终结果）
+    reviewStore.words[word] = reviewSession.snapshot;
+    reviewSession.snapshot = null;
+    answerReview(word, "unknown");
+  }
+
   const prev = reviewSession.lastResult;
   if (prev && reviewSession.stats[prev] > 0) reviewSession.stats[prev] -= 1;
   reviewSession.stats.unknown += 1;
   reviewSession.lastResult = "unknown";
   saveReviewSession();
-  
+
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 进入下一个词或过渡页 */
+/** 进入下一个词或过渡页。
+    队末重排：本条被判「模糊/不认识」→ 放回当天队列末尾再次出现，
+    直到最终「认识」通过；队列彻底走完（idx 追上含重排的长度）才进入过渡页 */
 function reviewNext() {
   ttsStop();
+  playNextSound(); // 下一题提示音（「滴」，与 TTS 通道互不影响）
+  if (reviewSession.lastResult === "fuzzy" || reviewSession.lastResult === "unknown") {
+    reviewSession.queue.push(reviewSession.current);
+  }
   reviewSession.idx += 1;
   reviewSession.step = "answer";
   reviewSession.lastResult = null;
@@ -1101,10 +1152,10 @@ function reviewNext() {
   renderReviewByPhase();
 }
 
-/** 进入拼写阶段 */
+/** 进入拼写阶段（拼写队列基于当天词集合去重后随机打乱：
+    Phase 1 队末重排会在 queue 中留下重复项，拼写每词只考一次起步） */
 function goToSpellPhase() {
-  // 初始化拼写队列（随机打乱）
-  reviewSession.spellQueue = shuffleArray(reviewSession.queue.slice());
+  reviewSession.spellQueue = shuffleArray(Array.from(new Set(reviewSession.queue)));
   reviewSession.spellIdx = 0;
   reviewSession.phase = "spell";
   reviewSession.spell = { submitted: false, correct: false, input: "" };
@@ -1112,42 +1163,43 @@ function goToSpellPhase() {
   renderReviewByPhase();
 }
 
-/** 提交拼写 */
+/** 提交拼写：「确认」= 提交 + 判断。
+    正确 → 立即进入下一个单词（播放提示音，无需再点「下一个」）；
+    错误 → 停留当前单词提示重输，再次「确认」重新判断 */
 function submitSpell() {
   const word = reviewSession.current;
   const input = $("#spell-input");
   const v = (input ? input.value : reviewSession.spell.input).trim().toLowerCase();
-  
+
   reviewSession.spell.input = v;
   reviewSession.spell.submitted = true;
   reviewSession.spell.correct = (v === word);
-  
+
   if (reviewSession.spell.correct) {
+    // 正确：直接前进到下一题（正确 = 通过，从队列移除，不重排）
     reviewSession.spellStats.correct += 1;
-  } else {
-    reviewSession.spellStats.wrong += 1;
-  }
-  
-  saveReviewSession();
-  rvRender(() => renderSpell($("#review-body")));
-}
-
-/** 跳过拼写 */
-function skipSpell() {
-  reviewSession.spellStats.skipped += 1;
-  reviewSession.spellIdx += 1;
-  reviewSession.spell = { submitted: false, correct: false, input: "" };
-  saveReviewSession();
-  renderReviewByPhase();
-}
-
-/** 拼写正确后进入下一个 */
-function spellNext() {
-  if (reviewSession.spell.correct) {
+    ttsStop(); // 切换单词：立即停掉可能仍在播放的读音
+    playNextSound(); // 下一题提示音（「滴」，与 TTS 通道互不影响）
     reviewSession.spellIdx += 1;
     reviewSession.spell = { submitted: false, correct: false, input: "" };
     saveReviewSession();
+    renderReviewByPhase(); // 渲染下一题（更新 current；队列走完则进入完成页）
+  } else {
+    // 错误：不进入下一题，保持当前单词重新输入
+    reviewSession.spellStats.wrong += 1;
+    saveReviewSession();
+    rvRender(() => renderSpell($("#review-body")));
   }
+}
+
+/** 跳过拼写 = 拼写未通过 → 放回当天拼写队列末尾再次出现（直到最终拼写正确） */
+function skipSpell() {
+  ttsStop(); // 切换单词：立即停掉可能仍在播放的读音
+  reviewSession.spellStats.skipped += 1;
+  reviewSession.spellQueue.push(reviewSession.current);
+  reviewSession.spellIdx += 1;
+  reviewSession.spell = { submitted: false, correct: false, input: "" };
+  saveReviewSession();
   renderReviewByPhase();
 }
 
@@ -1433,7 +1485,77 @@ function showHabitDay(dayStr) {
   el.style.display = "block";
 }
 
-/** 坚持看板渲染（连续天数 / 最长 / 已完成 / 可切换月份日历 / 目标日期标记 / 点击日期查看） */
+/* ============================================================
+   学习统计（坚持看板底部）：真实本地数据聚合 + 纯 SVG 图表
+   数据由 js/stats.js 提供（生词复习 + 知识条目复习 + 专注时长）
+   ============================================================ */
+
+/** 分钟数展示：≥10 取整，<10 保留 1 位小数（避免小数值全部显示 0） */
+function fmtStatMin(m) { return m >= 10 ? String(Math.round(m)) : String(Math.round(m * 10) / 10); }
+
+/** 柱状图（近 7 天复习数量：红=词汇 蓝=知识点；组内双柱 + 顶部数值） */
+function statsBarChartSVG(days) {
+  const W = 340, H = 148, padT = 18, padB = 20, padX = 6;
+  const ih = H - padT - padB;
+  const max = Math.max(1, ...days.map((d) => Math.max(d.vocab, d.entry)));
+  const gw = (W - padX * 2) / days.length;
+  const bw = Math.min(10, gw / 3.2);
+  let bars = "", texts = "";
+  days.forEach((d, i) => {
+    const cx = padX + gw * i + gw / 2;
+    const hv = d.vocab ? Math.max(3, (d.vocab / max) * ih) : 0;
+    const he = d.entry ? Math.max(3, (d.entry / max) * ih) : 0;
+    if (hv) bars += `<rect class="bar-vocab" x="${(cx - bw - 1.2).toFixed(1)}" y="${(H - padB - hv).toFixed(1)}" width="${bw.toFixed(1)}" height="${hv.toFixed(1)}" rx="2"/>`;
+    if (he) bars += `<rect class="bar-entry" x="${(cx + 1.2).toFixed(1)}" y="${(H - padB - he).toFixed(1)}" width="${bw.toFixed(1)}" height="${he.toFixed(1)}" rx="2"/>`;
+    if (d.vocab || d.entry) {
+      const top = Math.min(H - padB - hv, H - padB - he) - 4;
+      texts += `<text class="chart-val" x="${cx.toFixed(1)}" y="${top.toFixed(1)}">${d.vocab}·${d.entry}</text>`;
+    }
+    texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${cx.toFixed(1)}" y="${H - 6}">${d.label}</text>`;
+  });
+  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天复习数量柱状图">
+    ${bars}
+    <line class="chart-axis" x1="${padX}" x2="${W - padX}" y1="${H - padB}" y2="${H - padB}"/>
+    ${texts}
+  </svg>`;
+}
+
+/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长；双刻度，各自归一） */
+function statsLineChartSVG(days) {
+  const W = 340, H = 148, padL = 30, padR = 30, padT = 18, padB = 20;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const maxC = Math.max(1, ...days.map((d) => d.cumMin));
+  const maxD = Math.max(1, ...days.map((d) => d.dailyMin));
+  const x = (i) => padL + (iw * i) / (days.length - 1);
+  const yC = (v) => H - padB - (v / maxC) * ih;
+  const yD = (v) => H - padB - (v / maxD) * ih;
+  let grid = "", dots = "", texts = "";
+  [1, 0.5, 0].forEach((f) => {
+    const y = (H - padB - f * ih).toFixed(1);
+    grid += `<line class="chart-grid" x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}"/>`;
+    texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxC * f)}</text>`;
+    texts += `<text class="chart-axis-label" x="${W - padR + 4}" y="${Number(y) + 3}">${fmtStatMin(maxD * f)}</text>`;
+  });
+  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yC(d.cumMin).toFixed(1)}`).join(" ");
+  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yD(d.dailyMin).toFixed(1)}`).join(" ");
+  days.forEach((d, i) => {
+    dots += `<circle class="chart-dot dot-cum" cx="${x(i).toFixed(1)}" cy="${yC(d.cumMin).toFixed(1)}" r="2.4"/>`;
+    dots += `<circle class="chart-dot dot-daily" cx="${x(i).toFixed(1)}" cy="${yD(d.dailyMin).toFixed(1)}" r="2.4"/>`;
+    texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
+  });
+  const last = days.length - 1;
+  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yC(days[last].cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(days[last].cumMin)}</text>`;
+  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yD(days[last].dailyMin) + 12).toFixed(1)}" text-anchor="end">今日 ${fmtStatMin(days[last].dailyMin)}</text>`;
+  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
+    ${grid}
+    <polyline class="line-cum" points="${ptsC}"/>
+    <polyline class="line-daily" points="${ptsD}"/>
+    ${dots}
+    ${texts}
+  </svg>`;
+}
+
+/** 坚持看板渲染（连续天数 / 最长 / 已完成 / 可切换月份日历 / 目标日期标记 / 点击日期查看 / 学习统计） */
 function renderHabits() {
   const body = $("#habits-body");
   if (!body) return;
@@ -1490,6 +1612,39 @@ function renderHabits() {
   const monthOpts = Array.from({ length: 12 }, (_, i) => i + 1)
     .map((m) => `<option value="${m}"${m === month + 1 ? " selected" : ""}>${m} 月</option>`).join("");
 
+  /* 学习统计（真实本地数据：生词复习 + 知识条目复习 + 专注时长；stats.js 缺失时优雅跳过） */
+  let statsHTML = "";
+  if (window.VH_STATS) {
+    const s = VH_STATS.snapshot();
+    const d7 = VH_STATS.last7();
+    const barHasData = d7.some((d) => d.vocab || d.entry);
+    const lineHasData = d7.some((d) => d.cumMin > 0 || d.dailyMin > 0);
+    statsHTML = `
+    <section class="task-section">
+      <div class="task-section-head"><p class="section-eyebrow">统计</p></div>
+      <div class="stat-grid">
+        <div class="stat-cell"><p class="stat-label">今日复习</p><p class="stat-value"><b>${s.today.vocab}</b><i>词</i><em>/</em><b>${s.today.entry}</b><i>条</i></p></div>
+        <div class="stat-cell"><p class="stat-label">累计复习</p><p class="stat-value"><b>${s.total.vocab}</b><i>词</i><em>/</em><b>${s.total.entry}</b><i>条</i></p></div>
+        <div class="stat-cell"><p class="stat-label">今日总时长</p><p class="stat-value"><b>${fmtStatMin(s.today.min)}</b><i>分钟</i></p></div>
+        <div class="stat-cell"><p class="stat-label">累计时长</p><p class="stat-value"><b>${fmtStatMin(s.total.min)}</b><i>分钟</i></p></div>
+      </div>
+    </section>
+    <section class="task-section">
+      <div class="task-section-head">
+        <p class="section-eyebrow">复习数量 · 近 7 天</p>
+        <div class="chart-legend"><span class="lg"><span class="sw sw-vocab"></span>词汇</span><span class="lg"><span class="sw sw-entry"></span>知识点</span></div>
+      </div>
+      ${barHasData ? statsBarChartSVG(d7) : `<div class="chart-empty">近 7 天暂无复习记录</div>`}
+    </section>
+    <section class="task-section">
+      <div class="task-section-head">
+        <p class="section-eyebrow">学习时间 · 近 7 天</p>
+        <div class="chart-legend"><span class="lg"><span class="ln ln-cum"></span>累计</span><span class="lg"><span class="ln ln-daily"></span>今日</span></div>
+      </div>
+      ${lineHasData ? statsLineChartSVG(d7) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
+    </section>`;
+  }
+
   body.innerHTML = `
     <section class="habit-stats">
       <div class="habit-stat"><b>${cur}</b><span>当前连续<br>天数</span></div>
@@ -1521,7 +1676,8 @@ function renderHabits() {
     <section class="task-section">
       <div class="task-section-head"><p class="section-eyebrow">目标进度</p></div>
       ${goalRows}
-    </section>`;
+    </section>
+    ${statsHTML}`;
 
   /* 快捷选择年月 → 立即切换日历（change 即跳转，无需确定按钮） */
   const py = $("#cal-picker-year"), pm = $("#cal-picker-month");
@@ -2078,12 +2234,43 @@ function renderGreeting() {
   $("#greeting").textContent = h < 12 ? "早上好" : h < 18 ? "下午好" : "晚上好";
 }
 
+/* ---------- ECDICT 分片后台预热 ----------
+   列表数据来自 localStorage（跨会话持久），而 ECDICT 分片缓存只在内存中（重启即清空）。
+   启动后列表里的 ECDICT-only 词（考研词书未收录）分片未加载时，音标/释义会显示为空。
+   这里在渲染后按需异步加载这些分片，成功后重渲染一次，保证
+   「列表显示 → 点击词条 → 详情」与搜索链路使用一致、可靠的词典查询机制。
+   安全说明：ECDICT 分片加载后即缓存（加载失败也缓存 null），重复扫描代价可忽略；
+   仅当有词由缺失变为可用时才重渲染，词典中不存在该形式的词返回 null 不触发，避免循环。 */
+let ecdictWarmTimer = null;
+function warmDisplayedEcdict() {
+  const seen = {};
+  const missing = [];
+  const collect = (arr) => {
+    for (const w of arr) {
+      const k = String(w || "").trim().toLowerCase();
+      if (k && !seen[k] && !dictGet(k)) { seen[k] = 1; missing.push(k); }
+    }
+  };
+  collect(todayWords());
+  collect(starredWords());
+  collect(records.history.slice(-HISTORY_MAX).map((h) => h.w));
+  if (!missing.length) return; // 全部可查：无需加载
+  if (ecdictWarmTimer) return; // 已有一轮进行中，合并避免重复加载/重渲染
+  ecdictWarmTimer = setTimeout(() => {
+    ecdictWarmTimer = null;
+    Promise.all(missing.map((k) => dictGetAsync(k))).then((results) => {
+      if (results.some((d) => !!d)) renderAll(); // 确有词补齐成功 → 重渲染让音标/释义出现
+    });
+  }, 120);
+}
+
 function renderAll() {
   rolloverIfNeeded(); // 任何渲染路径先做跨天检查：App 进程存活跨过 04:00 时，确保今日生词/今日次数及时切换
   renderHome();
   renderWords();
   renderHistory();
   renderExportMeta();
+  warmDisplayedEcdict();
 }
 
 /* ---------- 页面切换 ---------- */
@@ -2159,13 +2346,7 @@ $("#review-body").addEventListener("click", (e) => {
     fire(ready && reviewSession.phase === "spell", skipSpell);
     return;
   }
-  
-  // Phase 2: 下一个（拼写正确后）
-  if (e.target.closest("#spell-next")) {
-    fire(ready && reviewSession.phase === "spell", spellNext);
-    return;
-  }
-  
+
   // 完成页：返回首页
   if (e.target.closest("#review-done-back")) {
     exitReview();
@@ -2472,23 +2653,38 @@ function renderReverseResults(q) {
     }).join("");
 }
 
+/** 词条详情渲染（与搜索链路一致的词典路由）：考研词书优先，未命中回退 ECDICT。
+    生词列表 / 查询记录 / Review 等入口点击词条时，ECDICT 分片可能尚未加载
+    （内存缓存，App 重启即清空），需与搜索链路一样按需异步加载后再渲染，
+    否则 ECDICT-only 词（如 manufacturer）会误报「词典未收录」。 */
 function renderSheetDetail(word) {
-  const d = dictGet(word);
-  if (!d) {
-    sheetBody.innerHTML = `<p class="sheet-hint">词典未收录「${esc(word)}」</p>`;
-    return;
-  }
-  const m = wordMeta(word);
+  const w = String(word || "").trim().toLowerCase();
+  if (!w) return;
+  sheetInput.value = w; // 详情视图同步输入框（生词列表/Review 入口可能未设置）
+  const d = dictGet(w); // 考研词书 / 已加载的 ECDICT 分片：同步命中直接渲染
+  if (d) { renderSheetDetailWith(w, d); return; }
+  // 考研未命中且 ECDICT 分片未加载：异步按需加载后渲染（与 dictGetAsync 搜索兜底一致）
+  dictGetAsync(w).then((e) => {
+    if (!sheetOpen || sheetInput.value.trim().toLowerCase() !== w) return; // 面板已关/输入已变 → 作废
+    if (e) renderSheetDetailWith(w, e);
+    else sheetBody.innerHTML = `<p class="sheet-hint">词典未收录「${esc(w)}」</p>`;
+  });
+  sheetBody.innerHTML = `<p class="sheet-hint">正在查询词典…</p>`;
+}
+
+/** 用已命中的词条渲染详情视图（d 为 dictGet/dictGetAsync 的返回值） */
+function renderSheetDetailWith(w, d) {
+  const m = wordMeta(w);
   sheetBody.innerHTML = `<div class="result-detail">
     <p class="detail-word">
-      <span class="word">${wordHTML(word, m.total)}</span>
+      <span class="word">${wordHTML(w, m.total)}</span>
       <span class="detail-word-actions">
-        <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
-        <button class="add-one-btn" data-addone="${esc(word)}" type="button">+1</button>
+        <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+        <button class="add-one-btn" data-addone="${esc(w)}" type="button">+1</button>
       </span>
     </p>
-    <p class="detail-phonetic">${esc(phoneticOf(word))}</p>
-    ${senseLines(word).map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("")}
+    <p class="detail-phonetic">${esc(phoneticOf(w))}</p>
+    ${senseLines(w).map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("")}
     <div class="detail-meta">
       <span class="meta-chip"><span class="chip-label">今日</span>${m.today} 次</span>
       <span class="meta-chip"><span class="chip-label">累计</span>${m.total} 次</span>

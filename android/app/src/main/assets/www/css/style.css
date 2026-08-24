@@ -961,17 +961,31 @@ body.review-active #page-review .back-btn:active {
   flex-direction: column;
 }
 
-/* 屏幕切换动画：旧屏淡出 → 新屏淡入（轻微位移，节奏短促） */
+/* 屏幕切换动画：翻书换页（从左向右轻翻，约 280ms，轻微克制）
+   旧屏克隆为「翻出页」盖在新屏上，以左缘为轴向右轻旋揭走；新屏垫底旋入就位 */
 .rv-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.rv-screen.rv-leave { animation: rvOut 0.12s ease both; }
-.rv-screen.rv-enter { animation: rvIn 0.3s cubic-bezier(0.32, 0.72, 0, 1) both; }
-@keyframes rvIn {
-  from { opacity: 0; transform: translateY(14px); }
-  to { opacity: 1; transform: translateY(0); }
+
+/* 翻出页：不透明背景（与页面同色），避免翻起时透出下层新页；不响应交互 */
+.review-body > .rv-flip-out {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--bg);
+  transform-origin: left center;
+  backface-visibility: hidden;
+  pointer-events: none;
+  animation: rvFlipOut 0.28s cubic-bezier(0.42, 0.1, 0.25, 1) both;
 }
-@keyframes rvOut {
-  from { opacity: 1; transform: translateY(0); }
-  to { opacity: 0; transform: translateY(-8px); }
+@keyframes rvFlipOut {
+  from { transform: perspective(1200px) rotateY(0deg) translateX(0); opacity: 1; }
+  to { transform: perspective(1200px) rotateY(-16deg) translateX(9%); opacity: 0; }
+}
+
+/* 进入页：新屏从左侧轻微旋入就位（像翻开后露出的下一页） */
+.rv-screen.rv-flip-in { animation: rvFlipIn 0.28s cubic-bezier(0.25, 0.5, 0.2, 1) both; }
+@keyframes rvFlipIn {
+  from { opacity: 0; transform: perspective(1200px) rotateY(5deg) translateX(-2.5%); }
+  to { opacity: 1; transform: perspective(1200px) rotateY(0deg) translateX(0); }
 }
 
 /* ================================================================
@@ -1597,8 +1611,8 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
 
 /* 动效偏好：关闭全部复习动画 */
 @media (prefers-reduced-motion: reduce) {
-  .rv-screen.rv-leave,
-  .rv-screen.rv-enter,
+  .review-body > .rv-flip-out,
+  .rv-screen.rv-flip-in,
   .rv-speaker.pop,
   .rv-detail-indicator,
   .rv-spell-result-word,
@@ -1902,6 +1916,80 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
 }
 .habit-stat b { font-size: 24px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
 .habit-stat span { font-size: 11.5px; color: var(--text-3); text-align: center; line-height: 1.35; }
+
+/* ---------- 坚持看板 · 学习统计（卡片 + 图表） ---------- */
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.stat-cell {
+  padding: 13px 14px 12px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+.stat-label { font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: var(--text-3); }
+.stat-value {
+  margin-top: 5px;
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: 3px;
+}
+.stat-value b {
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.stat-value i { font-style: normal; font-size: 11.5px; color: var(--text-3); }
+.stat-value em { font-style: normal; font-size: 12px; color: var(--text-3); margin: 0 3px 0 4px; }
+
+.chart-legend { display: flex; align-items: center; gap: 12px; font-size: 11.5px; color: var(--text-2); }
+.chart-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.chart-legend .sw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.chart-legend .sw-vocab { background: #FF3B30; }
+html[data-theme="dark"] .chart-legend .sw-vocab { background: #FF453A; }
+.chart-legend .sw-entry { background: var(--accent); opacity: 0.9; }
+.chart-legend .ln { width: 15px; height: 0; border-top: 2.5px solid; flex: none; }
+.chart-legend .ln-cum { border-color: var(--accent); }
+.chart-legend .ln-daily { border-color: #FF9500; border-top-style: dashed; }
+html[data-theme="dark"] .chart-legend .ln-daily { border-color: #FF9F0A; }
+
+.chart-svg { display: block; width: 100%; height: auto; }
+.chart-svg text { font-family: inherit; }
+.chart-x { font-size: 9px; fill: var(--text-3); text-anchor: middle; }
+.chart-x.today { fill: var(--accent); font-weight: 700; }
+.chart-val { font-size: 8.5px; fill: var(--text-3); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.chart-val.strong { fill: var(--accent); font-weight: 700; font-size: 9.5px; }
+.chart-val.daily { fill: #FF9500; font-weight: 700; font-size: 9.5px; }
+html[data-theme="dark"] .chart-val.daily { fill: #FF9F0A; }
+.chart-axis-label { font-size: 8.5px; fill: var(--text-3); font-variant-numeric: tabular-nums; }
+.chart-axis { stroke: var(--hairline-strong); stroke-width: 1; }
+.chart-grid { stroke: var(--hairline); stroke-width: 1; stroke-dasharray: none; }
+.bar-vocab { fill: #FF3B30; }
+html[data-theme="dark"] .bar-vocab { fill: #FF453A; }
+.bar-entry { fill: var(--accent); opacity: 0.88; }
+.line-cum { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line-daily { fill: none; stroke: #FF9500; stroke-width: 2; stroke-dasharray: 4 3.5; stroke-linejoin: round; stroke-linecap: round; }
+html[data-theme="dark"] .line-daily { stroke: #FF9F0A; }
+.chart-dot { stroke-width: 1.5; }
+.chart-dot.dot-cum { fill: var(--surface); stroke: var(--accent); }
+.chart-dot.dot-daily { fill: var(--surface); stroke: #FF9500; }
+html[data-theme="dark"] .chart-dot.dot-daily { stroke: #FF9F0A; }
+.chart-empty {
+  padding: 30px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-card);
+}
 
 .cal-week, .cal-grid {
   display: grid;

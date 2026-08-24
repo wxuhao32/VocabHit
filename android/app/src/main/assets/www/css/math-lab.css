@@ -1,0 +1,598 @@
+/* ============================================================
+   Math Lab · 样式（遵循 style.css 设计变量，移动优先，暗色自动适配）
+   页面：math-lab 主页 / math-config 配置页 / math-canvas 画布页
+   ============================================================ */
+
+/* ================= 主页：分区与列表 ================= */
+
+.ml-sec-title {
+  margin: 26px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.ml-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ml-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: transform var(--t-fast) ease, background var(--t-fast) ease;
+}
+.ml-item:active { transform: scale(0.985); background: var(--surface-2); }
+
+.ml-item-main { flex: 1; min-width: 0; }
+
+.ml-item-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-item-tag {
+  flex: none;
+  padding: 1.5px 7px;
+  border-radius: 99px;
+  font-size: 10.5px;
+  font-weight: 550;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.ml-item-tag-saved { color: #34C759; background: rgba(52, 199, 89, 0.12); }
+html[data-theme="dark"] .ml-item-tag-saved { color: #30D158; background: rgba(48, 209, 88, 0.16); }
+
+.ml-item-sub {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ml-item-time {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.ml-item-more {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  color: var(--text-3);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1;
+  transition: background var(--t-fast) ease, color var(--t-fast) ease;
+}
+.ml-item-more:active { background: var(--accent-soft); color: var(--accent); }
+
+.ml-empty {
+  padding: 26px 16px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 13.5px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-card);
+}
+.ml-empty-sub { margin-top: 6px; font-size: 12px; color: var(--text-3); }
+
+/* ================= 配置页：类型 chips ================= */
+
+.ml-type-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 2px 0 6px;
+  margin-bottom: 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.ml-type-chips::-webkit-scrollbar { display: none; }
+
+.ml-chip {
+  flex: none;
+  padding: 8px 16px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 550;
+  transition: all var(--t-fast) ease;
+}
+.ml-chip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ml-type-hint {
+  margin: 4px 0 14px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+/* ================= 配置页：表单 ================= */
+
+.ml-field { margin-bottom: 14px; }
+
+.ml-field-label {
+  margin-bottom: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.ml-field-label-gap { margin-top: 18px; }
+.ml-req { margin-left: 3px; color: #FF3B30; }
+
+.ml-input {
+  width: 100%;
+  height: 46px;
+  padding: 0 14px;
+  border-radius: var(--r-field);
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
+}
+.ml-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ml-input-expr {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 14.5px;
+  letter-spacing: 0.01em;
+}
+
+/* 公式即时校验反馈 */
+.ml-parse { margin: 7px 0 0; font-size: 12.5px; }
+.ml-parse-ok { color: #34C759; }
+html[data-theme="dark"] .ml-parse-ok { color: #30D158; }
+.ml-parse-err { color: #FF3B30; }
+html[data-theme="dark"] .ml-parse-err { color: #FF453A; }
+
+/* 定义域双输入 */
+.ml-domain-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ml-domain-sep { color: var(--text-3); font-size: 14px; }
+
+/* 开关（iOS 风格，与 app 设计语言一致） */
+.ml-field-toggle { display: flex; flex-direction: column; gap: 10px; }
+
+.ml-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ml-switch input { position: absolute; opacity: 0; pointer-events: none; }
+
+.ml-switch-track {
+  flex: none;
+  width: 42px;
+  height: 25px;
+  border-radius: 99px;
+  background: var(--hairline-strong);
+  transition: background var(--t-med) var(--ease);
+  position: relative;
+}
+.ml-switch-knob {
+  position: absolute;
+  top: 2.5px;
+  left: 2.5px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform var(--t-med) var(--ease);
+}
+.ml-switch input:checked + .ml-switch-track { background: #34C759; }
+.ml-switch input:checked + .ml-switch-track .ml-switch-knob { transform: translateX(17px); }
+
+.ml-switch-label { font-size: 14px; color: var(--text); }
+
+/* 分段选择 */
+.ml-seg {
+  display: flex;
+  gap: 6px;
+  padding: 3px;
+  border-radius: var(--r-field);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+}
+.ml-seg-btn {
+  flex: 1;
+  height: 36px;
+  border-radius: calc(var(--r-field) - 3px);
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text-2);
+  transition: all var(--t-fast) ease;
+}
+.ml-seg-btn.on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* 次要按钮 */
+.ml-ghost-btn {
+  width: 100%;
+  height: 44px;
+  margin-top: 10px;
+  border-radius: var(--r-btn);
+  border: 1px solid var(--hairline-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 550;
+  transition: transform var(--t-fast) ease, background var(--t-fast) ease;
+}
+.ml-ghost-btn:active { transform: scale(0.98); background: var(--surface-2); }
+
+/* ================= Math Canvas 沉浸页（全屏画布 · 极简交互） ================= */
+
+/* 沉浸模式：隐藏底部 tabbar（同 review-active 模式）；
+   顶部安全区 padding 一并清除 —— 画布从屏幕物理顶端开始绘制，杜绝顶部白边
+   （状态栏安全区由悬浮条自身的 top: calc(安全区 + 间隙) 保证，画布铺满但控件不遮挡） */
+body.ml-canvas-active .tabbar { display: none; }
+body.ml-canvas-active .app { padding-bottom: 0 !important; padding-top: 0 !important; }
+
+/* 整个屏幕 = 数学画布（真全屏：100dvh，不再扣除 --sat） */
+#page-math-canvas.active {
+  display: block;
+  height: 100dvh;
+  padding: 0;
+  overflow: hidden;
+}
+
+.ml-cv-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--surface);
+  overflow: hidden;
+  animation: mlCvIn var(--t-med) var(--ease);
+}
+@keyframes mlCvIn {
+  from { opacity: 0; transform: scale(0.985); }
+  to { opacity: 1; transform: scale(1); }
+}
+#ml-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+
+/* ---------- 浮动顶栏：返回 | 公式 | ⋯（毛玻璃轻量）
+   top = 安全区 + 3px 间隙：不遮挡状态栏的前提下尽量上移，顶部更紧凑 ---------- */
+.ml-cv-topbar {
+  position: absolute;
+  top: calc(3px + var(--sat));
+  left: 10px;
+  right: 10px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: saturate(1.4) blur(14px);
+  -webkit-backdrop-filter: saturate(1.4) blur(14px);
+  border: 1px solid var(--hairline);
+  box-shadow: 0 1px 10px rgba(0, 0, 0, 0.05);
+}
+html[data-theme="dark"] .ml-cv-topbar { box-shadow: 0 1px 10px rgba(0, 0, 0, 0.25); }
+
+.ml-cv-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease;
+}
+.ml-cv-btn:active { transform: scale(0.9); background: var(--surface-2); }
+.ml-cv-btn .icon { width: 17px; height: 17px; }
+
+/* 顶栏中间：当前公式（即页面标题） */
+.ml-cv-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14.5px;
+  font-weight: 650;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 坐标读数（顶栏下方右侧，随顶栏上移同步 -5px） ---------- */
+.ml-cv-coord {
+  position: absolute;
+  top: calc(55px + var(--sat));
+  right: 12px;
+  z-index: 4;
+  padding: 5px 11px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--hairline);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* ---------- 底部信息条（积分值 / 切线斜率 / 极限结果等） ---------- */
+.ml-cv-info {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(12px + var(--sab));
+  z-index: 4;
+  padding: 8px 13px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--hairline);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+  pointer-events: none;
+}
+.ml-cv-info p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ml-cv-info p:not(:first-child) { margin-top: 1px; }
+
+/* ---------- 手势提示（首次进入，交互即隐） ---------- */
+.ml-cv-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 27%;
+  transform: translateX(-50%) translateY(6px);
+  z-index: 4;
+  padding: 7px 16px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: saturate(1.4) blur(10px);
+  -webkit-backdrop-filter: saturate(1.4) blur(10px);
+  border: 1px solid var(--hairline);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--text-2);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--t-med) var(--ease), transform var(--t-med) var(--ease);
+}
+.ml-cv-hint.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ================= Bottom Sheet（预设操作 / Canvas 菜单） ================= */
+
+/* 菜单开关行（网格 / 坐标轴显隐） */
+.ml-menu-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 40px);
+  margin: 0 20px;
+  padding: 13px 14px;
+  border-radius: 13px;
+  background: var(--surface-2);
+  cursor: pointer;
+  transition: background var(--t-fast) ease;
+}
+.ml-menu-toggle-row:active { background: var(--surface); }
+.ml-menu-toggle-row + .ml-menu-toggle-row { margin-top: 8px; }
+
+.ml-menu-toggle-label {
+  font-size: 14.5px;
+  font-weight: 550;
+  color: var(--text);
+}
+
+/* 迷你开关（iOS 风格） */
+.ml-menu-mini-sw {
+  flex: none;
+  width: 40px;
+  height: 24px;
+  border-radius: 99px;
+  background: var(--hairline-strong);
+  position: relative;
+  transition: background var(--t-med) var(--ease);
+}
+.ml-menu-mini-sw::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+  transition: transform var(--t-med) var(--ease);
+}
+.ml-menu-mini-sw.on { background: #34C759; }
+.ml-menu-mini-sw.on::after { transform: translateX(16px); }
+
+.ml-menu-sheet .ml-psheet-btn { margin-top: 8px; }
+
+.ml-psheet-title {
+  padding: 6px 20px 12px;
+  font-size: 15.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.ml-psheet-btn {
+  display: block;
+  width: calc(100% - 40px);
+  margin: 0 20px;
+  padding: 14px 0;
+  border-radius: 13px;
+  text-align: center;
+  font-size: 14.5px;
+  font-weight: 550;
+  color: var(--text);
+  background: var(--surface-2);
+  transition: background var(--t-fast) ease, transform var(--t-fast) ease;
+}
+.ml-psheet-btn:active { transform: scale(0.98); }
+.ml-psheet-btn + .ml-psheet-btn { margin-top: 8px; }
+.ml-psheet-btn:last-child { margin-bottom: 16px; }
+.ml-psheet-danger { color: #FF3B30; }
+html[data-theme="dark"] .ml-psheet-danger { color: #FF453A; }
+.ml-psheet-cancel { color: var(--text-2); }
+
+.ml-menu-name-row { padding: 0 20px 4px; }
+.ml-menu-name-row input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: var(--r-field);
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14.5px;
+  outline: none;
+}
+.ml-menu-name-row input:focus { border-color: var(--accent); }
+
+/* ================= 居中对话框（命名 / 删除确认） ================= */
+
+.ml-dlg-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--overlay);
+  backdrop-filter: var(--scrim-blur);
+  -webkit-backdrop-filter: var(--scrim-blur);
+  animation: mlFadeIn var(--t-fast) ease;
+}
+
+@keyframes mlFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ml-dlg {
+  width: 100%;
+  max-width: 320px;
+  padding: 22px 20px 16px;
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-float);
+  animation: mlDlgIn var(--t-med) var(--ease);
+}
+
+@keyframes mlDlgIn {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.ml-dlg-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+  text-align: center;
+}
+.ml-dlg-text {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-2);
+  text-align: center;
+}
+.ml-dlg-input {
+  width: 100%;
+  height: 44px;
+  margin-top: 16px;
+  padding: 0 14px;
+  border-radius: var(--r-field);
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+}
+.ml-dlg-input:focus { border-color: var(--accent); }
+
+.ml-dlg-btns {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.ml-dlg-btn {
+  flex: 1;
+  height: 42px;
+  border-radius: var(--r-btn);
+  font-size: 14.5px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text-2);
+  transition: transform var(--t-fast) ease;
+}
+.ml-dlg-btn:active { transform: scale(0.97); }
+.ml-dlg-ok { background: var(--accent); color: #fff; }
+.ml-dlg-ok:disabled { opacity: 0.45; }
+.ml-dlg-danger { background: #FF3B30; color: #fff; }
+html[data-theme="dark"] .ml-dlg-danger { background: #FF453A; }
+
+/* ================= 桌面适配（鼠标悬停态） ================= */
+
+@media (hover: hover) {
+  .ml-item:hover { background: var(--surface-2); }
+  .ml-item-more:hover { background: var(--accent-soft); color: var(--accent); }
+  .ml-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .ml-chip.on:hover { border-color: var(--accent); color: #fff; }
+  .ml-cv-btn:hover { background: var(--surface-2); }
+  .ml-menu-toggle-row:hover { background: var(--surface); }
+}
