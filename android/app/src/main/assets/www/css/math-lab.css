@@ -586,6 +586,21 @@ html[data-theme="dark"] .ml-psheet-danger { color: #FF453A; }
 .ml-dlg-danger { background: #FF3B30; color: #fff; }
 html[data-theme="dark"] .ml-dlg-danger { background: #FF453A; }
 
+/* ================= 作用域硬门控（串层根绝：非 Math Lab 上下文浮层物理不可见） =================
+   Math Lab 浮层（菜单/预设操作/对话框）是全局 fixed 元素，与词典面板共用 .sheet 类，
+   共享 bottom: var(--ime)。body.ml-lab-scope 由 mathLab.js 依据三页激活态实时同步；
+   非作用域内无论何种路径/时序残留 .open/.visible，浮层都强制不可见、不可交互、
+   不可聚焦 —— 键盘弹出、--ime 变化、页面 resize、搜索结果更新等任何首页场景下，
+   Math Lab 图像设置 UI 都不可能显形。Math Lab 页面内（作用域开启）行为零变化。 */
+body:not(.ml-lab-scope) #ml-menu-sheet,
+body:not(.ml-lab-scope) #ml-psheet,
+body:not(.ml-lab-scope) #ml-menu-overlay,
+body:not(.ml-lab-scope) #ml-psheet-overlay,
+body:not(.ml-lab-scope) .ml-dlg-mask {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 /* ================= 桌面适配（鼠标悬停态） ================= */
 
 @media (hover: hover) {

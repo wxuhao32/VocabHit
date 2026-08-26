@@ -454,6 +454,19 @@ function playNextSound() {
   } catch (_) { /* 静默 */ }
 }
 
+/* ---------- MCQ 选择题音效 ----------
+   答对：复用 next.mp3（与拼写正确的「滴」声一致）
+   答错：用户提供的「错误提示音.mp3」 */
+const errorSoundRef = new Audio("%E9%94%99%E8%AF%AF%E6%8F%90%E7%A4%BA%E9%9F%B3.mp3");
+function playCorrectSound() { playNextSound(); }
+function playErrorSound() {
+  try {
+    errorSoundRef.currentTime = 0;
+    const p = errorSoundRef.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (_) { /* 静默 */ }
+}
+
 function wordHTML(word, count) {
   return `${esc(word)}<sup class="count">${count}</sup>`;
 }
@@ -637,26 +650,35 @@ function answerReview(word, result) {
 
 const REVIEW_SESSION_KEY = "vc-review-session-v2";
 
-// 新会话状态结构
+// 新会话状态结构（task pool 任务池模式）
+// 每个单词拆为 3 个独立任务（recall / w2m / m2w），全部打乱后统一排队。
+// 任务池随机出题，用户无法预测下一题类型。
+// 每种状态独立完成：答错只重复该状态，不影响其他两种。
 let reviewSession = {
   day: "",
   phase: "meaning",     // "meaning" | "transition" | "spell" | "done"
-  // Phase 1
-  queue: [],            // 当天队列（模糊/不认识会被放回队尾追加，长度可增长）
-  idx: 0,
-  step: "answer",       // "answer" | "detail"
-  current: null,
-  lastResult: null,
-  snapshot: null,
+  // Phase 1 — 任务池
+  queue: [],            // 任务池 [{word, step:"recall"|"w2m"|"m2w"}]
+  idx: 0,               // 当前任务索引
+  current: null,         // 当前单词（便捷引用）
+  currentTask: null,     // 当前任务对象
+  lastResult: null,      // 最近一次 recall 判断（known/fuzzy/unknown）
+  snapshot: null,        // 记错了回滚快照
   stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
-  // 当天会话状态（与长期 Review 状态分离）：
-  //   answeredToday —— 已做过「当天首次判断」（长期间隔算法基准已锁定）的词，
-  //                    当天重复出现只决定是否继续排队，绝不再触碰长期算法
-  //   initialCount  —— 当天初始队列长度（过渡/完成页文案基数；重复重排不计入）
+  // MCQ 选择题
+  mcqData: null,         // 当前 MCQ 题目数据
+  mcqStats: { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 },
+  // 任务完成跟踪
+  completed: {},         // { "word|step": true } 已完成的任务
+  wordResults: {},       // { word: { recall:"known"|"fuzzy"|"unknown", w2m:true|false, m2w:true|false } }
+  wordsDone: {},         // { word: true } 三种全部完成的单词
+  // 详情页上下文（MCQ 答错后进入详情页，需要知道返回后做什么）
+  detailCtx: null,       // { task, action:"complete"|"retry" }
+  // 当天会话状态
   answeredToday: {},
   initialCount: 0,
   // Phase 2
-  spellQueue: [],       // 随机打乱后的拼写队列（跳过的词放回队尾，直到拼写正确）
+  spellQueue: [],
   spellIdx: 0,
   spell: { submitted: false, correct: false, input: "" },
   spellStats: { correct: 0, wrong: 0, skipped: 0 },
@@ -680,29 +702,277 @@ function shuffleArray(arr) {
   return result;
 }
 
-/** 读取并恢复会话 */
+/* ============================================================
+   MCQ 选择题 — 干扰项生成算法
+   ------------------------------------------------------------
+   两种选择题共用词典数据（DICT_KEYS / DICT_DATA / ECDICT），
+   纯只读查询，绝不修改任何词典或会话状态。
+   ============================================================ */
+
+/** 中文释义→纯释义文本（去掉词性前缀），用于长度/字符比较 */
+function stripPos(meaning) {
+  return String(meaning).replace(/^[^\u4e00-\u9fa5a-zA-Z]*[a-z]+\.\s*/, "").trim();
+}
+
+/** 两个中文字符串共享的字符数 */
+function sharedChineseChars(a, b) {
+  let count = 0;
+  const setB = new Set(b);
+  for (const ch of a) { if (setB.has(ch)) count++; }
+  return count;
+}
+
+/**
+ * 提取单词的前 N 条释义，拼接为单行文本（用于 MCQ 选项显示）
+ * @param {string} word 单词
+ * @param {number} maxSenses 最多取几条（默认 2）
+ * @returns {string} 拼接后的释义文本，如 "制造商；生产商" 
+ */
+function topSensesText(word, maxSenses = 2) {
+  const d = dictGet(word);
+  if (!d) return "";
+  const senses = sensesOf(d);
+  const parts = [];
+  for (const [, defs] of senses) {
+    for (const def of (defs || [])) {
+      parts.push(def);
+      if (parts.length >= maxSenses) return parts.join("；");
+    }
+  }
+  return parts.join("；");
+}
+
+/**
+ * 提取单词的全部释义，拼接为多行文本（用于 MCQ 题目显示）
+ * @param {string} word 单词
+ * @returns {string} 全部释义拼接（用换行分隔）
+ */
+function allSensesText(word) {
+  const d = dictGet(word);
+  if (!d) return "";
+  const senses = sensesOf(d);
+  const parts = [];
+  for (const [, defs] of senses) {
+    for (const def of (defs || [])) {
+      parts.push(def);
+    }
+  }
+  return parts.join("；");
+}
+
+/**
+ * 单词→选释义：生成 3 个干扰项，每项包含 2 条释义 + 源单词（用于长按）
+ * @returns {{text: string, word: string}[]}  干扰项数组
+ */
+function generateMeaningDistractors(word, correctMeaning, count = 3) {
+  const correctText = stripPos(correctMeaning);
+  const correctLen = correctText.length;
+  if (correctLen === 0) return [];
+
+  const candidates = [];
+  const correctWordLower = word.toLowerCase();
+  for (const w of DICT_KEYS) {
+    if (w === correctWordLower) continue;
+    const d = DICT_DATA[w];
+    if (!d || !d.senses || !d.senses.length) continue;
+    const firstSense = d.senses[0];
+    const defs = Array.isArray(firstSense[1]) ? firstSense[1] : [];
+    if (!defs.length) continue;
+    const text = stripPos(defs[0]);
+    if (!text || text.length < 1) continue;
+    if (text === correctText) continue;
+    const lenDiff = Math.abs(text.length - correctLen);
+    if (lenDiff > correctLen + 3) continue;
+    const shared = sharedChineseChars(text, correctText);
+    const score = shared * 2 - lenDiff;
+    candidates.push({ text: defs[0], score, w });
+  }
+
+  candidates.sort((a, b) => b.score - a.score || Math.random() - 0.5);
+  const seen = new Set([correctText]);
+  const result = [];
+  for (const c of candidates) {
+    if (seen.has(stripPos(c.text))) continue;
+    seen.add(stripPos(c.text));
+    // 每个干扰项取 2 条释义，并记录源单词
+    const displayText = topSensesText(c.w, 2);
+    result.push({ text: displayText || c.text, word: c.w });
+    if (result.length >= count) break;
+  }
+  return result;
+}
+
+/**
+ * 两个英文单词的编辑距离（简化版：仅用于相似度评分）
+ */
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * 判断两个英文单词是否同词根/词形变化（排除为干扰项）
+ * 规则：共享前缀长度 > min(len)*0.6 视为同根
+ */
+function sameRoot(a, b) {
+  const la = a.toLowerCase(), lb = b.toLowerCase();
+  let prefixLen = 0;
+  const minLen = Math.min(la.length, lb.length);
+  for (let i = 0; i < minLen; i++) {
+    if (la[i] === lb[i]) prefixLen++;
+    else break;
+  }
+  return prefixLen > minLen * 0.6;
+}
+
+/**
+ * 释义→选单词：生成 3 个英文干扰项
+ * @param {string} word   目标单词
+ * @param {number} count  干扰项数量（默认 3）
+ * @returns {string[]}    干扰项单词数组（不含正确单词）
+ */
+function generateWordDistractors(word, count = 3) {
+  const target = word.toLowerCase();
+  const targetLen = target.length;
+  if (targetLen === 0) return [];
+
+  const candidates = [];
+  for (const w of DICT_KEYS) {
+    if (w === target) continue;
+    if (sameRoot(w, target)) continue; // 排除同词根/词形变化
+    const lenDiff = Math.abs(w.length - targetLen);
+    if (lenDiff > 3) continue; // 长度差太大
+    // 评分：长度差越小越好 + 首字母相同加分 + 编辑距离越小越好
+    const ed = editDistance(w, target);
+    let score = -ed * 2 - lenDiff;
+    if (w[0] === target[0]) score += 3; // 首字母相同加分
+    candidates.push({ word: w, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score || Math.random() - 0.5);
+  const result = [];
+  for (const c of candidates) {
+    result.push(c.word);
+    if (result.length >= count) break;
+  }
+  return result;
+}
+
+/**
+ * 构建 MCQ 题目数据
+ * @param {"w2m"|"m2w"} type  题目类型
+ * @param {string} word        目标单词
+ * @returns {object|null}      { question, options[], correctIdx, optionWords[] }
+ *   optionWords[i] = 该选项对应的单词（w2m 时为选项释义所属单词，m2w 时为选项单词）
+ */
+function buildMcqData(type, word) {
+  const d = dictGet(word);
+  if (!d) return null;
+
+  if (type === "w2m") {
+    // 单词→选释义：每个选项展示 2 条释义
+    const senses = sensesOf(d);
+    if (!senses.length || !senses[0][1] || !senses[0][1].length) return null;
+    const firstMeaning = senses[0][1][0];
+    const correctText = topSensesText(word, 2); // 正确选项：前 2 条释义
+    const distractors = generateMeaningDistractors(word, firstMeaning, 3);
+    if (distractors.length < 1) return null;
+    // 构建选项数组：{text: 显示文本, word: 对应单词}
+    const correctOpt = { text: correctText, word: word };
+    const allOpts = shuffleArray([correctOpt, ...distractors]);
+    const correctIdx = allOpts.indexOf(correctOpt);
+    const optionTexts = allOpts.map(o => o.text);
+    const optionWords = allOpts.map(o => o.word);
+    return { question: word, options: optionTexts, correctIdx, type: "w2m", optionWords };
+  }
+
+  if (type === "m2w") {
+    // 释义→选单词：题目显示完整释义集合
+    const senses = sensesOf(d);
+    if (!senses.length || !senses[0][1] || !senses[0][1].length) return null;
+    const fullQuestion = allSensesText(word); // 全部释义
+    const distractors = generateWordDistractors(word, 3);
+    if (distractors.length < 1) return null;
+    const options = shuffleArray([word, ...distractors]);
+    const correctIdx = options.indexOf(word);
+    return { question: fullQuestion, options, correctIdx, type: "m2w", optionWords: options };
+  }
+
+  return null;
+}
+
+/** 构建任务池：每个单词拆为 3 个任务（recall/w2m/m2w），全部打乱 */
+function buildTaskPool(words) {
+  const tasks = [];
+  words.forEach(w => {
+    tasks.push({ word: w, step: "recall" });
+    tasks.push({ word: w, step: "w2m" });
+    tasks.push({ word: w, step: "m2w" });
+  });
+  return shuffleArray(tasks);
+}
+
+/** 读取并恢复会话（支持旧格式迁移） */
 function loadReviewSession() {
   try {
     const s = JSON.parse(localStorage.getItem(REVIEW_SESSION_KEY) || "null");
     if (s && s.day === vocabDay() && Array.isArray(s.queue) && s.queue.length > 0) {
+      // 检测旧格式（queue 元素是字符串而非对象）→ 废弃旧会话，重建
+      if (typeof s.queue[0] === "string") {
+        return null; // 旧格式 → 返回 null 让 openReview 重建
+      }
+
       // 与生词本同步：过滤掉已删除的词
-      s.queue = s.queue.filter((w) => reviewStore.words[w] && isStarred(w));
+      s.queue = s.queue.filter(t => t && t.word && reviewStore.words[t.word] && isStarred(t.word));
       if (s.queue.length === 0) return null;
 
       // Phase 1 恢复
       s.idx = Math.min(s.idx || 0, s.queue.length);
       if (!s.stats) s.stats = { n: 0, known: 0, fuzzy: 0, unknown: 0 };
-      // 当天会话字段（旧会话无此字段时兜底：answeredToday 空 = 恢复后按新逻辑继续，
-      // 行为与旧版一致，不会更糟；initialCount 以当前队列长度近似）
       if (!s.answeredToday || typeof s.answeredToday !== "object") s.answeredToday = {};
-      if (!s.initialCount || s.initialCount < 1) s.initialCount = s.queue.length;
-      
-      // Phase 2 恢复（如果已进入拼写阶段）
-      if (s.phase === "spell" || s.phase === "done") {
-        if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
-          s.spellQueue = shuffleArray(Array.from(new Set(s.queue))); // 去重（queue 含队末重排重复项）
+      if (!s.initialCount || s.initialCount < 1) s.initialCount = Math.ceil(s.queue.length / 3);
+      if (!s.completed || typeof s.completed !== "object") s.completed = {};
+      if (!s.wordResults || typeof s.wordResults !== "object") s.wordResults = {};
+      if (!s.wordsDone || typeof s.wordsDone !== "object") s.wordsDone = {};
+      if (!s.mcqStats) s.mcqStats = { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 };
+      // 恢复当前任务引用
+      if (s.idx < s.queue.length) {
+        s.currentTask = s.queue[s.idx];
+        s.current = s.currentTask.word;
+      }
+      // MCQ 数据恢复
+      if (s.currentTask && s.currentTask.step !== "recall" && !s.mcqData) {
+        // MCQ 任务但无题目数据 → 重建
+        const mcqType = s.currentTask.step;
+        s.mcqData = buildMcqData(mcqType, s.currentTask.word);
+        if (!s.mcqData) {
+          // 词典数据不足 → 跳过该任务
+          s.completed[s.currentTask.word + "|" + s.currentTask.step] = true;
+          s.idx++;
+          s.currentTask = s.idx < s.queue.length ? s.queue[s.idx] : null;
+          s.current = s.currentTask ? s.currentTask.word : null;
         }
-        s.spellQueue = s.spellQueue.filter((w) => reviewStore.words[w] && isStarred(w));
+      }
+      
+      // Phase 2 恢复
+      if (s.phase === "spell" || s.phase === "done") {
+        const uniqueWords = [...new Set(s.queue.map(t => t.word))];
+        if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
+          s.spellQueue = shuffleArray(uniqueWords);
+        }
+        s.spellQueue = s.spellQueue.filter(w => reviewStore.words[w] && isStarred(w));
         s.spellIdx = Math.min(s.spellIdx || 0, s.spellQueue.length);
         if (!s.spellStats) s.spellStats = { correct: 0, wrong: 0, skipped: 0 };
         if (!s.spell) s.spell = { submitted: false, correct: false, input: "" };
@@ -739,18 +1009,26 @@ function openReview() {
       return;
     }
     
+    // 构建任务池：每个单词拆为 3 个任务，全部打乱
+    const taskPool = buildTaskPool(queue);
     reviewSession = {
       day: vocabDay(),
       phase: "meaning",
-      queue: queue,
+      queue: taskPool,
       idx: 0,
-      step: "answer",
       current: null,
+      currentTask: null,
       lastResult: null,
       snapshot: null,
       stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
       answeredToday: {},
       initialCount: queue.length,
+      mcqData: null,
+      mcqStats: { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 },
+      completed: {},
+      wordResults: {},
+      wordsDone: {},
+      detailCtx: null,
       spellQueue: [],
       spellIdx: 0,
       spell: { submitted: false, correct: false, input: "" },
@@ -770,15 +1048,55 @@ function renderReviewByPhase() {
   const body = $("#review-body");
   
   if (reviewSession.phase === "meaning") {
+    // 跳过已完成的任务（可能被标记为 completed 但仍在队列中）
+    while (reviewSession.idx < reviewSession.queue.length) {
+      const t = reviewSession.queue[reviewSession.idx];
+      const key = t.word + "|" + t.step;
+      if (reviewSession.completed[key]) {
+        reviewSession.idx++;
+        continue;
+      }
+      break;
+    }
     if (reviewSession.idx >= reviewSession.queue.length) {
       // Phase 1 完成，进入过渡页
       reviewSession.phase = "transition";
       saveReviewSession();
       return rvRender(() => renderTransition(body));
     }
-    reviewSession.current = reviewSession.queue[reviewSession.idx];
-    if (reviewSession.step === "detail") {
-      return rvRender(() => renderDetail(body));
+    const task = reviewSession.queue[reviewSession.idx];
+    reviewSession.currentTask = task;
+    reviewSession.current = task.word;
+
+    // 按任务类型路由（进度由各渲染函数统一调用 rvMeaningProgress）
+    if (task.step === "recall") {
+      return rvRender(() => renderMeaning(body));
+    }
+    if (task.step === "w2m") {
+      // 构建 MCQ 数据（如果还没有）
+      if (!reviewSession.mcqData || reviewSession.mcqData.type !== "w2m" || reviewSession.mcqData.question !== task.word) {
+        reviewSession.mcqData = buildMcqData("w2m", task.word);
+        if (!reviewSession.mcqData) {
+          // 词典数据不足 → 跳过该任务
+          reviewSession.completed[task.word + "|w2m"] = true;
+          reviewSession.idx++;
+          saveReviewSession();
+          return renderReviewByPhase(); // 递归处理下一个任务
+        }
+      }
+      return rvRender(() => renderMcqWord2Meaning(body));
+    }
+    if (task.step === "m2w") {
+      if (!reviewSession.mcqData || reviewSession.mcqData.type !== "m2w" || reviewSession.mcqData.question !== task.word) {
+        reviewSession.mcqData = buildMcqData("m2w", task.word);
+        if (!reviewSession.mcqData) {
+          reviewSession.completed[task.word + "|m2w"] = true;
+          reviewSession.idx++;
+          saveReviewSession();
+          return renderReviewByPhase();
+        }
+      }
+      return rvRender(() => renderMcqMean2Word(body));
     }
     return rvRender(() => renderMeaning(body));
   }
@@ -872,12 +1190,18 @@ function rvRender(fn) {
   }, 300);
 }
 
+/** 统一进度计算：基于已完成任务数 / 任务池总数 */
+function rvMeaningProgress() {
+  const totalTasks = reviewSession.queue.length;
+  const doneTasks = Object.keys(reviewSession.completed).length;
+  rvSetProgress(doneTasks + 1, totalTasks);
+}
+
 /** Phase 1: 词义复习 - 回忆页（单词舞台中央，顶部进度，底部判断区） */
 function renderMeaning(body) {
   const word = reviewSession.current;
-  const total = reviewSession.queue.length;
   
-  rvSetProgress(reviewSession.idx + 1, total);
+  rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-meaning rv-screen">
     <div class="rv-stage">
@@ -916,12 +1240,14 @@ function renderMeaning(body) {
 /** Phase 1: 词义复习 - 释义确认页（单词头部 → 词性/释义列表 → 底部操作） */
 function renderDetail(body) {
   const word = reviewSession.current;
-  const total = reviewSession.queue.length;
-  const last = reviewSession.lastResult;
+  const ctx = reviewSession.detailCtx;
+  const isRecallDetail = ctx && ctx.task && ctx.task.step === "recall";
+  const isMcqWrong = ctx && ctx.action === "retry";
   
-  // 判断印记颜色
-  const indicatorClass = last === "known" ? "rv-detail-indicator--known" 
-                       : last === "fuzzy" ? "rv-detail-indicator--fuzzy" 
+  // 判断印记颜色：recall 详情用 recall 结果，MCQ 答错用 unknown 色
+  const resultForColor = isMcqWrong ? "unknown" : reviewSession.lastResult;
+  const indicatorClass = resultForColor === "known" ? "rv-detail-indicator--known" 
+                       : resultForColor === "fuzzy" ? "rv-detail-indicator--fuzzy" 
                        : "rv-detail-indicator--unknown";
   
   const senses = rvSenseRows(word);
@@ -929,7 +1255,7 @@ function renderDetail(body) {
     ? senses.map((s) => `<div class="rv-sense">${s.pos ? `<span class="rv-pos">${esc(s.pos)}</span>` : ""}<p class="rv-sense-meaning">${esc(s.meaning)}</p></div>`).join("")
     : `<div class="rv-sense"><p class="rv-sense-meaning" style="color:var(--text-2);">暂无释义</p></div>`;
   
-  rvSetProgress(reviewSession.idx + 1, total);
+  rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-detail rv-screen">
     <div class="rv-detail-head">
@@ -944,13 +1270,130 @@ function renderDetail(body) {
       ${sensesHtml}
     </div>
     <div class="rv-detail-actions">
-      <button class="rv-btn-wrong" id="review-wrong" type="button">记错了</button>
-      <button class="rv-btn-next" id="review-next" type="button">下一个</button>
+      ${isRecallDetail ? '<button class="rv-btn-wrong" id="review-wrong" type="button">记错了</button>' : ""}
+      <button class="rv-btn-next" id="review-next" type="button">${isMcqWrong ? "继续" : "下一个"}</button>
     </div>
   </div>`;
   
-  // 自动播放 TTS 一次（帮助音义绑定）
-  setTimeout(() => ttsSpeak(word, 1), 200);
+  // 自动播放 TTS：仅 recall 详情时
+  if (isRecallDetail) {
+    setTimeout(() => ttsSpeak(word, 1), 200);
+  }
+}
+
+/* ============================================================
+   MCQ 选择题 — 渲染函数
+   ------------------------------------------------------------
+   两种选择题共用选项卡片布局，差异仅在题目区（单词 vs 释义）
+   和选项内容（中文释义 vs 英文单词）。
+   点击选项即判断，正确绿色/错误红色 + 音效，1.2s 后自动进入下一步。
+   长按选项显示反向信息（辅助学习，不影响答题结果）。
+   ============================================================ */
+
+/** MCQ 选项卡片 HTML 生成 */
+function mcqOptionsHtml(options) {
+  return options.map((opt, i) =>
+    `<button class="rv-mcq-option" data-mcq-idx="${i}" data-mcq-longpress="${i}" type="button">${esc(opt)}</button>`
+  ).join("");
+}
+
+/** Phase 1 子步骤: 单词→选释义 */
+function renderMcqWord2Meaning(body) {
+  const word = reviewSession.current;
+  const data = reviewSession.mcqData;
+  if (!data) { reviewNext(); return; }
+
+  rvMeaningProgress();
+
+  body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
+    <div class="rv-stage">
+      <div class="rv-word-row">
+        <h2 class="rv-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
+        <button class="rv-speaker" id="rv-mcq-speaker" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
+      </div>
+      <p class="rv-mcq-hint">选择正确的中文释义</p>
+    </div>
+    <div class="rv-mcq-options">
+      ${mcqOptionsHtml(data.options)}
+    </div>
+  </div>`;
+}
+
+/** Phase 1 子步骤: 释义→选单词 */
+function renderMcqMean2Word(body) {
+  const word = reviewSession.current;
+  const data = reviewSession.mcqData;
+  if (!data) { reviewNext(); return; }
+
+  rvMeaningProgress();
+
+  body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
+    <div class="rv-stage">
+      <p class="rv-mcq-question">${esc(data.question)}</p>
+      <p class="rv-mcq-hint">选择正确的英文单词</p>
+    </div>
+    <div class="rv-mcq-options">
+      ${mcqOptionsHtml(data.options)}
+    </div>
+  </div>`;
+}
+
+/** MCQ 答题处理：点击选项 → 判断 → 音效 + 视觉反馈 → 1.2s 后自动进入下一步 */
+function onMcqAnswer(clickedIdx) {
+  const data = reviewSession.mcqData;
+  const task = reviewSession.currentTask;
+  if (!data || !task) return;
+  const correct = clickedIdx === data.correctIdx;
+  const word = task.word;
+  const step = task.step; // "w2m" or "m2w"
+
+  // 记录 MCQ 结果到 wordResults
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word][step] = correct;
+
+  // MCQ 统计
+  if (step === "w2m") {
+    reviewSession.mcqStats.w2mTotal += 1;
+    if (correct) reviewSession.mcqStats.w2mCorrect += 1;
+  } else {
+    reviewSession.mcqStats.m2wTotal += 1;
+    if (correct) reviewSession.mcqStats.m2wCorrect += 1;
+  }
+
+  // 视觉反馈
+  const options = document.querySelectorAll(".rv-mcq-option");
+  options.forEach((opt, i) => {
+    opt.style.pointerEvents = "none";
+    if (i === data.correctIdx) {
+      opt.classList.add(correct ? "correct" : "reveal-correct");
+    }
+    if (i === clickedIdx && !correct) {
+      opt.classList.add("wrong");
+    }
+  });
+
+  // 音效
+  if (correct) {
+    playCorrectSound();
+  } else {
+    playErrorSound();
+  }
+
+  if (correct) {
+    // 正确：标记任务完成，尝试完成单词，1.2s 后前进
+    reviewSession.completed[word + "|" + step] = true;
+    tryCompleteWord(word);
+    reviewSession.detailCtx = { task: task, action: "advance" };
+    saveReviewSession();
+    setTimeout(() => reviewNext(), 1200);
+  } else {
+    // 错误：设置 detailCtx 为 retry，1.2s 后进入详情页
+    reviewSession.detailCtx = { task: task, action: "retry" };
+    saveReviewSession();
+    setTimeout(() => {
+      rvRender(() => renderDetail($("#review-body")));
+    }, 1200);
+  }
 }
 
 /** 阶段过渡页 */
@@ -977,6 +1420,7 @@ function renderTransition(body) {
         <b>${s.unknown}</b><span>不认识</span>
       </div>
     </div>
+    ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal > 0 ? `<p class="rv-transition-mcq">选择题正确率：${reviewSession.mcqStats.w2mCorrect + reviewSession.mcqStats.m2wCorrect} / ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal}</p>` : ""}
     <button class="rv-btn-go" id="rv-go-spell" type="button">开始拼写复习</button>
   </div>`;
 }
@@ -1003,6 +1447,7 @@ function renderSpell(body) {
       <input class="rv-spell-input ${inputClass}" 
              id="spell-input" 
              type="text" 
+             enterkeyhint="done"
              placeholder="输入英文单词" 
              autocomplete="off" 
              autocapitalize="off" 
@@ -1025,6 +1470,27 @@ function renderSpell(body) {
       saveReviewSession();
       // 移除错误样式
       input.classList.remove("error");
+    });
+    /* Android IME「回车 / 下一步 / 完成」键 = 点击「确认」：
+       preventDefault 拦截 WebView 默认行为（焦点后移 / 聚焦元素滚入视野 → 界面整体上移）；
+       再触发 #spell-submit.click()，走与「确认」按钮完全相同的委托链路
+       （同一 300ms 防抖 + 同一 submitSpell 判定，不引入第二套判断机制）。
+       组词中的回车（isComposing / keyCode 229，输入法用于候选词确认）不拦截 */
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const isEnter = e.key === "Enter" || e.keyCode === 13 || e.which === 13;
+      if (!isEnter) return;
+      e.preventDefault();
+      const btn = $("#spell-submit");
+      if (btn) btn.click();
+      // 双保险：复位滚动，杜绝个别 ROM / 输入法仍把页面整体上移（键盘不受影响）
+      const stabilize = () => {
+        window.scrollTo(0, 0);
+        const screen = body.firstElementChild;
+        if (screen) screen.scrollTop = 0;
+      };
+      stabilize();
+      requestAnimationFrame(stabilize);
     });
     setTimeout(() => {
       input.focus();
@@ -1064,6 +1530,18 @@ function renderDone(body) {
       </div>
     </div>
     
+    ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal > 0 ? `<div class="rv-done-stats-block">
+      <p class="rv-done-section-title">选择题</p>
+      <div class="rv-done-stats">
+        <div class="rv-done-stat rv-done-stat--correct">
+          <b>${reviewSession.mcqStats.w2mCorrect + reviewSession.mcqStats.m2wCorrect}</b><span>正确</span>
+        </div>
+        <div class="rv-done-stat rv-done-stat--wrong">
+          <b>${(reviewSession.mcqStats.w2mTotal - reviewSession.mcqStats.w2mCorrect) + (reviewSession.mcqStats.m2wTotal - reviewSession.mcqStats.m2wCorrect)}</b><span>错误</span>
+        </div>
+      </div>
+    </div>` : ""}
+    
     <div class="rv-done-stats-block">
       <p class="rv-done-section-title">拼写复习</p>
       <div class="rv-done-stats">
@@ -1081,71 +1559,136 @@ function renderDone(body) {
   </div>`;
 }
 
-/** 用户点击判断按钮。
-    当天首次判断 → 调用长期间隔算法（answerReview），锁定该词今天的间隔基准；
-    当天重复出现（队末重排后再考）→ 绝不再触碰长期算法，只决定是否继续排队 */
+/** 用户点击判断按钮（认识/模糊/不认识）。
+    任务池模式：记录 recall 结果 → 标记 recall 任务完成 → 进入详情页。
+    answerReview 延迟到单词的三种任务全部完成后调用。 */
 function onReviewAnswer(result) {
-  ttsStop(); // 用户已作答：立即停掉回忆页自动发音（不允许播完）
-  // 学习统计：完成一次生词复习 + 结算本题有效时长（答题间隔，封顶 3 分钟）
+  ttsStop();
   if (window.VH_STATS) VH_STATS.add({ vocab: 1, sec: VH_STATS.elapsed() });
   const word = reviewSession.current;
+  const task = reviewSession.currentTask;
   const firstOfDay = !reviewSession.answeredToday[word];
 
   if (firstOfDay) {
-    // 首次判断：写入长期 Review 状态（当天间隔算法基准，后续重复判断不可更改）
     const st = reviewStore.words[word];
-    // 记录快照用于「记错了」回滚
     reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null;
-    answerReview(word, result);
+    // 注意：answerReview 不在这里调用，延迟到单词三种任务全部完成时
     reviewSession.answeredToday[word] = 1;
   } else {
-    // 重复判断：长期状态已锁定，不回滚、不写入
     reviewSession.snapshot = null;
   }
 
-  // 更新会话状态（重复判断同样计入答题统计：当天复习次数可超过单词数）
+  // 记录 recall 结果
   reviewSession.lastResult = result;
-  reviewSession.step = "detail";
-  reviewSession.stats.n += 1;
-  reviewSession.stats[result] += 1;
-  saveReviewSession();
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].recall = result;
 
+  // 标记 recall 任务完成
+  reviewSession.completed[word + "|recall"] = true;
+
+  // 设置详情页上下文：返回后完成当前任务并前进
+  reviewSession.detailCtx = { task: task, action: "complete" };
+
+  saveReviewSession();
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 记错了：首次判断 → 回滚并按不认识写入长期算法；重复判断 → 仅修正当天判断
-    （长期基准已在首次判断锁定，「记错了」只把词放回队尾继续考） */
+/** 记错了：回滚 SR 状态 → 按不认识处理。
+    任务池模式：将 recall 结果改为 unknown，并将该单词的 w2m/m2w 任务全部标记完成（因为结果已是 unknown）。 */
 function reviewCorrection() {
   const word = reviewSession.current;
   if (!reviewSession.snapshot && !reviewSession.answeredToday[word]) return;
 
   if (reviewSession.snapshot) {
-    // 首次判断的修正：回滚 → 按「不认识」重算（仍属当天首次判断的最终结果）
     reviewStore.words[word] = reviewSession.snapshot;
     reviewSession.snapshot = null;
-    answerReview(word, "unknown");
+    // 不调用 answerReview，延迟到 tryCompleteWord
   }
 
-  const prev = reviewSession.lastResult;
-  if (prev && reviewSession.stats[prev] > 0) reviewSession.stats[prev] -= 1;
-  reviewSession.stats.unknown += 1;
   reviewSession.lastResult = "unknown";
-  saveReviewSession();
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].recall = "unknown";
 
+  // “记错了” = 不认识 → 三种任务全部完成（w2m/m2w 无需再考）
+  reviewSession.completed[word + "|recall"] = true;
+  reviewSession.completed[word + "|w2m"] = true;
+  reviewSession.completed[word + "|m2w"] = true;
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].w2m = true;
+  reviewSession.wordResults[word].m2w = true;
+
+  saveReviewSession();
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 进入下一个词或过渡页。
-    队末重排：本条被判「模糊/不认识」→ 放回当天队列末尾再次出现，
-    直到最终「认识」通过；队列彻底走完（idx 追上含重排的长度）才进入过渡页 */
+/** 计算组合结果：基于 wordResults 中已记录的三种结果 */
+function computeCombinedResult(word) {
+  const wr = reviewSession.wordResults[word] || {};
+  const recall = wr.recall || "known";
+  const w2m = wr.w2m; // true/false/undefined
+  const m2w = wr.m2w; // true/false/undefined
+  const mcqAnyWrong = w2m === false || m2w === false;
+  if (mcqAnyWrong || recall === "unknown") return "unknown";
+  if (recall === "fuzzy") return "fuzzy";
+  return "known";
+}
+
+/** 尝试完成一个单词：三种任务全部完成时调用 answerReview + 更新统计 */
+function tryCompleteWord(word) {
+  if (reviewSession.wordsDone[word]) return;
+  const r = reviewSession.wordResults[word] || {};
+  const recallDone = reviewSession.completed[word + "|recall"];
+  const w2mDone = reviewSession.completed[word + "|w2m"];
+  const m2wDone = reviewSession.completed[word + "|m2w"];
+  if (!recallDone || !w2mDone || !m2wDone) return;
+
+  // 三种任务全部完成 → 计算组合结果
+  reviewSession.wordsDone[word] = true;
+  const combined = computeCombinedResult(word);
+
+  // 调用 answerReview（当天首次判断）
+  const firstOfDay = reviewSession.answeredToday[word];
+  if (firstOfDay) {
+    answerReview(word, combined);
+  }
+
+  // 更新统计
+  reviewSession.stats.n += 1;
+  reviewSession.stats[combined] += 1;
+}
+
+/** 任务池模式下的“下一个”：根据 detailCtx 决定行为 */
 function reviewNext() {
   ttsStop();
-  playNextSound(); // 下一题提示音（「滴」，与 TTS 通道互不影响）
-  if (reviewSession.lastResult === "fuzzy" || reviewSession.lastResult === "unknown") {
-    reviewSession.queue.push(reviewSession.current);
+  playNextSound();
+
+  const ctx = reviewSession.detailCtx;
+
+  if (ctx && ctx.action === "retry") {
+    // MCQ 答错后查看完详情 → 将该任务重入队列末尾
+    reviewSession.queue.push({ word: ctx.task.word, step: ctx.task.step });
+    reviewSession.idx += 1;
+    reviewSession.detailCtx = null;
+    reviewSession.mcqData = null;
+    saveReviewSession();
+    renderReviewByPhase();
+    return;
   }
+
+  // 默认：完成任务并前进
+  if (ctx && ctx.task) {
+    // 如果这是 recall 任务且还没标记完成（通过“记错了”路径）
+    const key = ctx.task.word + "|" + ctx.task.step;
+    if (!reviewSession.completed[key]) {
+      reviewSession.completed[key] = true;
+    }
+    // 尝试完成该单词
+    tryCompleteWord(ctx.task.word);
+  }
+
   reviewSession.idx += 1;
-  reviewSession.step = "answer";
+  reviewSession.detailCtx = null;
+  reviewSession.mcqData = null;
   reviewSession.lastResult = null;
   reviewSession.snapshot = null;
   saveReviewSession();
@@ -1155,7 +1698,9 @@ function reviewNext() {
 /** 进入拼写阶段（拼写队列基于当天词集合去重后随机打乱：
     Phase 1 队末重排会在 queue 中留下重复项，拼写每词只考一次起步） */
 function goToSpellPhase() {
-  reviewSession.spellQueue = shuffleArray(Array.from(new Set(reviewSession.queue)));
+  // 从任务池提取唯一单词列表
+  const uniqueWords = [...new Set(reviewSession.queue.map(t => t.word))];
+  reviewSession.spellQueue = shuffleArray(uniqueWords);
   reviewSession.spellIdx = 0;
   reviewSession.phase = "spell";
   reviewSession.spell = { submitted: false, correct: false, input: "" };
@@ -1494,6 +2039,7 @@ function showHabitDay(dayStr) {
 function fmtStatMin(m) { return m >= 10 ? String(Math.round(m)) : String(Math.round(m * 10) / 10); }
 
 /** 柱状图（近 7 天复习数量：红=词汇 蓝=知识点；组内双柱 + 顶部数值） */
+let statsLineSel = null; // 折线图选中日索引（null = 默认显示今日）
 function statsBarChartSVG(days) {
   const W = 340, H = 148, padT = 18, padB = 20, padX = 6;
   const ih = H - padT - padB;
@@ -1508,8 +2054,11 @@ function statsBarChartSVG(days) {
     if (hv) bars += `<rect class="bar-vocab" x="${(cx - bw - 1.2).toFixed(1)}" y="${(H - padB - hv).toFixed(1)}" width="${bw.toFixed(1)}" height="${hv.toFixed(1)}" rx="2"/>`;
     if (he) bars += `<rect class="bar-entry" x="${(cx + 1.2).toFixed(1)}" y="${(H - padB - he).toFixed(1)}" width="${bw.toFixed(1)}" height="${he.toFixed(1)}" rx="2"/>`;
     if (d.vocab || d.entry) {
-      const top = Math.min(H - padB - hv, H - padB - he) - 4;
-      texts += `<text class="chart-val" x="${cx.toFixed(1)}" y="${top.toFixed(1)}">${d.vocab}·${d.entry}</text>`;
+      // 数值标签：每根柱单独标注自己的数量，水平居中于该柱顶部正上方（不再组合成 5/1 格式）。
+      // y 各自跟随本柱柱顶：柱高不同时两个数字一高一低，始终位于各自柱顶；
+      // 水平居中由 .chart-val 的 text-anchor: middle 保证；保留既有 1px 左移修正。
+      if (hv) texts += `<text class="chart-val" x="${(cx - bw / 2 - 1.2 - 1).toFixed(1)}" y="${(H - padB - hv - 4).toFixed(1)}">${d.vocab}</text>`;
+      if (he) texts += `<text class="chart-val" x="${(cx + bw / 2 + 1.2 - 1).toFixed(1)}" y="${(H - padB - he - 4).toFixed(1)}">${d.entry}</text>`;
     }
     texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${cx.toFixed(1)}" y="${H - 6}">${d.label}</text>`;
   });
@@ -1520,39 +2069,63 @@ function statsBarChartSVG(days) {
   </svg>`;
 }
 
-/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长；双刻度，各自归一） */
-function statsLineChartSVG(days) {
+/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长）
+    累计与每日同单位（分钟）→ 共用同一纵轴刻度：等值必然同高、累计≥每日必然不低于每日，
+    线条位置与左侧参考刻度严格一致（修正旧版双刻度各自归一的视觉失真：
+    曾出现累计 2.8 > 今日 1.4 两线却交汇同一点、同为 1.4 却一高一低）
+    sel：选中日索引（null = 默认今日）；点击某天数据列切换显示该日数据，点击图表外恢复今日 */
+function statsLineChartSVG(days, sel) {
   const W = 340, H = 148, padL = 30, padR = 30, padT = 18, padB = 20;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const maxC = Math.max(1, ...days.map((d) => d.cumMin));
-  const maxD = Math.max(1, ...days.map((d) => d.dailyMin));
+  const maxV = Math.max(1, ...days.map((d) => d.cumMin), ...days.map((d) => d.dailyMin));
   const x = (i) => padL + (iw * i) / (days.length - 1);
-  const yC = (v) => H - padB - (v / maxC) * ih;
-  const yD = (v) => H - padB - (v / maxD) * ih;
-  let grid = "", dots = "", texts = "";
+  const yOf = (v) => H - padB - (v / maxV) * ih;
+  const active = sel != null && sel >= 0 && sel < days.length; // 是否用户点选过
+  const si = active ? sel : days.length - 1; // 默认选中今日（最后一天）
+  const colW = iw / (days.length - 1);
+  let grid = "", dots = "", texts = "", hits = "";
   [1, 0.5, 0].forEach((f) => {
     const y = (H - padB - f * ih).toFixed(1);
     grid += `<line class="chart-grid" x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}"/>`;
-    texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxC * f)}</text>`;
-    texts += `<text class="chart-axis-label" x="${W - padR + 4}" y="${Number(y) + 3}">${fmtStatMin(maxD * f)}</text>`;
+    // 单一纵轴：仅左侧一组参考刻度（右侧不再独立成另一套刻度，避免数值误导）
+    texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxV * f)}</text>`;
   });
-  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yC(d.cumMin).toFixed(1)}`).join(" ");
-  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yD(d.dailyMin).toFixed(1)}`).join(" ");
+  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.cumMin).toFixed(1)}`).join(" ");
+  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.dailyMin).toFixed(1)}`).join(" ");
   days.forEach((d, i) => {
-    dots += `<circle class="chart-dot dot-cum" cx="${x(i).toFixed(1)}" cy="${yC(d.cumMin).toFixed(1)}" r="2.4"/>`;
-    dots += `<circle class="chart-dot dot-daily" cx="${x(i).toFixed(1)}" cy="${yD(d.dailyMin).toFixed(1)}" r="2.4"/>`;
-    texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
+    const cls = i === si && active ? " sel" : "";
+    const r = i === si && active ? 3.2 : 2.4;
+    dots += `<circle class="chart-dot dot-cum${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.cumMin).toFixed(1)}" r="${r}"/>`;
+    dots += `<circle class="chart-dot dot-daily${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.dailyMin).toFixed(1)}" r="${r}"/>`;
+    texts += `<text class="chart-x${d.isToday ? " today" : ""}${cls}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
+    // 整列透明命中区（置顶）：点中某天数据点/所在列即选中该天，触屏更易命中
+    const hx0 = i === 0 ? 0 : x(i) - colW / 2;
+    const hx1 = i === days.length - 1 ? W : x(i) + colW / 2;
+    hits += `<rect class="chart-hit" data-li="${i}" x="${hx0.toFixed(1)}" y="0" width="${(hx1 - hx0).toFixed(1)}" height="${H}" fill="transparent"/>`;
   });
-  const last = days.length - 1;
-  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yC(days[last].cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(days[last].cumMin)}</text>`;
-  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yD(days[last].dailyMin) + 12).toFixed(1)}" text-anchor="end">今日 ${fmtStatMin(days[last].dailyMin)}</text>`;
-  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
+  const sd = days[si];
+  // 数值标注与选中日数据点一一对应（默认今日）：累计 = 实线当日的值，日期标注 = 虚线当日学习时长
+  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yOf(sd.cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(sd.cumMin)}</text>`;
+  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yOf(sd.dailyMin) + 12).toFixed(1)}" text-anchor="end">${sd.isToday ? "今日" : sd.label} ${fmtStatMin(sd.dailyMin)}</text>`;
+  return `<svg id="stats-line-chart" class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
     ${grid}
+    ${active ? `<line class="chart-sel-line" x1="${x(si).toFixed(1)}" x2="${x(si).toFixed(1)}" y1="${padT}" y2="${H - padB}"/>` : ""}
     <polyline class="line-cum" points="${ptsC}"/>
     <polyline class="line-daily" points="${ptsD}"/>
     ${dots}
     ${texts}
+    ${hits}
   </svg>`;
+}
+
+/** 折线图选中日切换后仅重绘该 SVG（不重渲染整块看板，无滚动跳动） */
+function statsLineRender() {
+  const old = $("#stats-line-chart");
+  if (!old || !window.VH_STATS) return;
+  const tpl = document.createElement("div");
+  tpl.innerHTML = statsLineChartSVG(VH_STATS.last7(), statsLineSel);
+  const fresh = tpl.firstElementChild;
+  if (fresh) old.replaceWith(fresh);
 }
 
 /** 坚持看板渲染（连续天数 / 最长 / 已完成 / 可切换月份日历 / 目标日期标记 / 点击日期查看 / 学习统计） */
@@ -1641,7 +2214,7 @@ function renderHabits() {
         <p class="section-eyebrow">学习时间 · 近 7 天</p>
         <div class="chart-legend"><span class="lg"><span class="ln ln-cum"></span>累计</span><span class="lg"><span class="ln ln-daily"></span>今日</span></div>
       </div>
-      ${lineHasData ? statsLineChartSVG(d7) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
+      ${lineHasData ? statsLineChartSVG(d7, statsLineSel) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
     </section>`;
   }
 
@@ -2310,25 +2883,38 @@ $("#review-body").addEventListener("click", (e) => {
   const ready = now - reviewActionAt >= 300;
   const fire = (ok, fn) => { if (ok) { reviewActionAt = now; fn(); } };
   
-  // Phase 1: 判断按钮（认识/模糊/不认识）
+  // Phase 1: 判断按钮（认识/模糊/不认识）—— 仅 recall 任务时可用
   const ans = e.target.closest(".rv-btn[data-result]");
   if (ans && reviewSession.phase === "meaning") {
-    fire(ready && reviewSession.step === "answer", () => onReviewAnswer(ans.dataset.result));
+    const ct = reviewSession.currentTask;
+    fire(ready && ct && ct.step === "recall", () => onReviewAnswer(ans.dataset.result));
     return;
   }
   
-  // Phase 1: 记错了
+  // Phase 1: 记错了 —— 仅 recall 详情页可用
   if (e.target.closest("#review-wrong")) {
-    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewCorrection);
+    const ctx = reviewSession.detailCtx;
+    fire(ready && ctx && ctx.task && ctx.task.step === "recall", reviewCorrection);
     return;
   }
   
-  // Phase 1: 下一个（释义确认后）
+  // Phase 1: 下一个/继续 —— 详情页可用
   if (e.target.closest("#review-next")) {
-    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewNext);
+    fire(ready && reviewSession.detailCtx, reviewNext);
     return;
   }
-  
+
+  // MCQ: 点击选项答题（长按松开后的 click 不触发答题）
+  const mcqOpt = e.target.closest(".rv-mcq-option[data-mcq-idx]");
+  if (mcqOpt) {
+    const ct = reviewSession.currentTask;
+    if (ct && (ct.step === "w2m" || ct.step === "m2w")) {
+      if (mcqLongPressed) { mcqLongPressed = false; return; }
+      fire(ready, () => onMcqAnswer(parseInt(mcqOpt.getAttribute("data-mcq-idx"), 10)));
+      return;
+    }
+  }
+
   // 过渡页：开始拼写复习
   if (e.target.closest("#rv-go-spell")) {
     fire(ready && reviewSession.phase === "transition", goToSpellPhase);
@@ -2364,9 +2950,117 @@ $("#review-body").addEventListener("click", (e) => {
   }
 });
 
+/* ---------- MCQ 长按查看反向信息（辅助学习，不影响答题结果） ---------- */
+let mcqLongPressTimer = null;
+let mcqLongPressOverlay = null;
+let mcqLongPressed = false; // 标记本次长按已触发，阻止后续 click 答题
+
+function removeMcqOverlay() {
+  if (mcqLongPressTimer) { clearTimeout(mcqLongPressTimer); mcqLongPressTimer = null; }
+  if (mcqLongPressOverlay) { mcqLongPressOverlay.remove(); mcqLongPressOverlay = null; }
+}
+
+/** 显示长按浮层：完整词典释义卡片（复用搜索结果卡片样式）
+    不增加查询次数/记录/生词本，仅辅助查看。用户点击 +1 才执行加入生词本。 */
+function showMcqOverlay(word) {
+  removeMcqOverlay();
+  const d = dictGet(word);
+  if (!d) return;
+  const m = wordMeta(word);
+  const el = document.createElement("div");
+  el.className = "rv-mcq-longpress";
+  el.innerHTML = `<div class="rv-mcq-longpress-card">
+    <div class="result-detail">
+      <p class="detail-word">
+        <span class="word">${esc(word)}</span>
+        <span class="detail-word-actions">
+          <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+          <button class="add-one-btn" data-addone="${esc(word)}" type="button">+1</button>
+        </span>
+      </p>
+      <p class="detail-phonetic">${esc(phoneticOf(word))}</p>
+      ${senseLines(word).map(l => `<p class="detail-meaning">${esc(l)}</p>`).join("")}
+      <div class="detail-meta">
+        <span class="meta-chip"><span class="chip-label">今日</span>${m.today} 次</span>
+        <span class="meta-chip"><span class="chip-label">累计</span>${m.total} 次</span>
+      </div>
+    </div>
+  </div>`;
+  // 点击遮罩关闭 / 鼠标松开关闭 / 触摸结束关闭
+  el.addEventListener("click", (e) => {
+    // 点击卡片内部（+1/扬声器）不关闭，点击遮罩背景关闭
+    if (e.target === el) removeMcqOverlay();
+  });
+  el.addEventListener("mouseup", (e) => {
+    // 鼠标在遮罩上松开时关闭（解决长按后 overlay 截获 mouseup 的问题）
+    if (e.target === el) removeMcqOverlay();
+  });
+  el.addEventListener("touchend", () => removeMcqOverlay());
+  document.body.appendChild(el);
+  mcqLongPressOverlay = el;
+}
+
+/** 获取选项对应的单词（用于词典查询） */
+function getMcqOptionWord(optionIdx) {
+  const data = reviewSession.mcqData;
+  if (!data) return null;
+
+  if (data.type === "w2m") {
+    // 单词→选释义模式：直接从 optionWords 查找源单词
+    if (data.optionWords && data.optionWords[optionIdx]) {
+      return data.optionWords[optionIdx];
+    }
+    // 兆底：反查
+    const optionText = data.options[optionIdx];
+    if (!optionText) return null;
+    const results = reverseSearch(stripPos(optionText), 1);
+    return results.length > 0 ? results[0] : null;
+  }
+
+  if (data.type === "m2w") {
+    // 释义→选单词模式：选项就是单词
+    return data.options[optionIdx] || null;
+  }
+
+  return null;
+}
+
+// 长按触发逻辑（触摸 + 鼠标通用）
+function mcqLongPressStart(e) {
+  const opt = e.target.closest(".rv-mcq-option[data-mcq-longpress]");
+  if (!opt) return;
+  const ct = reviewSession.currentTask;
+  if (!ct || (ct.step !== "w2m" && ct.step !== "m2w")) return;
+  const idx = parseInt(opt.getAttribute("data-mcq-longpress"), 10);
+  mcqLongPressed = false;
+  mcqLongPressTimer = setTimeout(() => {
+    mcqLongPressed = true;
+    const word = getMcqOptionWord(idx);
+    if (word) {
+      showMcqOverlay(word);
+      try { navigator.vibrate && navigator.vibrate(30); } catch (_) {}
+    }
+  }, 500);
+}
+
+// 触摸事件（移动端）
+$("#review-body").addEventListener("touchstart", mcqLongPressStart, { passive: true });
+$("#review-body").addEventListener("touchend", removeMcqOverlay, { passive: true });
+$("#review-body").addEventListener("touchmove", removeMcqOverlay, { passive: true });
+
+// 鼠标事件（桌面端兑底）
+$("#review-body").addEventListener("mousedown", (e) => {
+  const opt = e.target.closest(".rv-mcq-option[data-mcq-longpress]");
+  if (opt) e.preventDefault(); // 防止长按时触发文本选择
+  mcqLongPressStart(e);
+});
+$("#review-body").addEventListener("mouseup", removeMcqOverlay);
+$("#review-body").addEventListener("mouseleave", removeMcqOverlay);
+
 /** 退出 Review 沉浸模式 */
 function exitReview() {
   document.body.classList.remove("review-active");
+  removeMcqOverlay(); // 退出时清理长按浮层
 }
 
 /** 清空复习队列确认层 */
@@ -2405,6 +3099,13 @@ function openHabits() {
 $("#tasks-entry").addEventListener("click", openTasks);
 $("#habits-entry").addEventListener("click", openHabits);
 $("#habits-body").addEventListener("click", (e) => {
+  // 折线图点选：命中某天数据列 → 切换显示该日的累计/学习时长（数据点、日期、时长一一对应）
+  const hit = e.target.closest(".chart-hit");
+  if (hit) {
+    statsLineSel = Number(hit.dataset.li);
+    statsLineRender();
+    return;
+  }
   const nav = e.target.closest("[data-nav]");
   if (nav) {
     if (nav.dataset.nav === "prev") habitsShift(-1);
@@ -2414,6 +3115,16 @@ $("#habits-body").addEventListener("click", (e) => {
   }
   const day = e.target.closest(".cal-cell[data-day]");
   if (day) { showHabitDay(day.dataset.day); return; }
+});
+
+/* 折线图点选恢复：点击图表以外任意位置 → 回到默认今日显示；
+   命中区自身（含重绘后已脱离 DOM 的元素，closest 仍可自匹配）不触发恢复 */
+document.addEventListener("click", (e) => {
+  if (statsLineSel === null) return;
+  if (!e.target || !e.target.closest) return;
+  if (e.target.closest(".chart-hit") || e.target.closest("#stats-line-chart")) return;
+  statsLineSel = null;
+  statsLineRender();
 });
 $("#tasks-body").addEventListener("click", (e) => {
   const check = e.target.closest(".task-check");
@@ -2713,29 +3424,13 @@ sheetOverlay.addEventListener("click", closeSheet);
 
 sheetInput.addEventListener("input", (e) => {
   const v = e.target.value.trim().toLowerCase();
-  // 内容与已记录词不同 = 旧会话失效（之后再次命中算新查询）
+  // 内容与已记录词不同 = 旧会话失效（之后点击进入详情算新查询）
   if (v !== sessionWord) {
     sessionWord = null;
     sessionConfirmed = null;
   }
-  // 输入即查：输入内容精确命中词典 = 查询已实际完成 → 记入历史查询记录（不进生词本）
-  if (v && v !== sessionWord) {
-    const hit = dictGet(v); // 考研或 ECDICT 已加载分片
-    if (hit) {
-      recordHistory(v);
-      sessionWord = v;
-      renderAll();
-    } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
-      // ECDICT 分片未加载：异步确认后补记（输入已变化则作废，防竞态）
-      dictGetAsync(v).then((d) => {
-        if (d && v !== sessionWord && sheetInput.value.trim().toLowerCase() === v) {
-          recordHistory(v);
-          sessionWord = v;
-          renderAll();
-        }
-      });
-    }
-  }
+  // 实时搜索只刷新候选/反查列表，不记录查询次数：
+  // 统计触发点统一为「点击词条并成功进入详情」或「回车确认」（commitQuery）。
   renderSheetResults(e.target.value);
 });
 
@@ -3060,14 +3755,65 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
+/** 模板化导出（PDF / PNG）：线条小狗整页背景 + 双板块词条排版，
+    详见 js/export-template.js。词条数据与现有导出同口径（导出前
+    dictGetAsync 预加载，保证音标/释义完整）。
+    模板缺失 / 空列表 / 超页数上限 → 返回 false，调用方回退旧导出路径。 */
+async function exportViaTemplate(fmt, name) {
+  const T = window.VH_ExportTemplate;
+  rolloverIfNeeded();
+  const words = exportWords();
+  if (!words.length) return false;
+  await Promise.all(words.map((w) => dictGetAsync(w)));
+  const isStarred = exportState.content === "starred";
+  const entries = words.map((w) => {
+    const m = wordMeta(w);
+    return {
+      word: w,
+      meta: isStarred ? `累计 ${m.total} 次查询` : `今日 ${m.today} 次 · 累计 ${m.total} 次`,
+      phonetic: phoneticOf(w),
+      lines: senseLines(w),
+    };
+  });
+  const canvases = await T.renderPages(entries);
+  console.log(`[export] renderPages -> ${canvases ? canvases.length + " page(s)" : "null (fallback)"}`);
+  if (!canvases) return false;
+  if (hasBridge()) { // Android：原生拼装多页 PDF / 长图 PNG，直接存入 Downloads
+    if (fmt === "pdf") {
+      const payload = JSON.stringify(canvases.map(T.canvasJpegDataUrl));
+      console.log(`[export] bridge exportPdfImages payloadLen=${payload.length}`);
+      window.AndroidBridge.exportPdfImages(name, payload);
+      console.log("[export] bridge exportPdfImages call returned");
+    } else {
+      const dataUrl = T.stackedPngDataUrl(canvases);
+      console.log(`[export] bridge exportImageFile dataUrlLen=${dataUrl.length} prefix=${dataUrl.slice(0, 32)}`);
+      window.AndroidBridge.exportImageFile(name, dataUrl);
+      console.log("[export] bridge exportImageFile call returned");
+    }
+    showToast(`导出中 · ${fmt.toUpperCase()}…`);
+    return true;
+  }
+  if (fmt === "pdf") {
+    downloadBlob(await T.canvasesToPdfBlob(canvases), `${name}.pdf`);
+  } else {
+    downloadBlob(await T.stackedPngBlob(canvases), `${name}.png`);
+  }
+  showToast(`已导出 ${name}.${fmt}`);
+  return true;
+}
+
 $("#export-btn").addEventListener("click", async () => {
   rolloverIfNeeded(); // 跨 04:00 先滚动业务日（与导出内容口径一致）
-  const html = await buildExportHTML(exportState.style); // await：先确保词典数据完整再导出
   const dateStr = vocabDay(); // 业务日期（04:00 切换点），非 UTC/自然日期
   const fmt = exportState.format;
   const name = exportState.content === "starred" ? `生词本-历史-${dateStr}` : `生词本-${dateStr}`;
   try {
-    if (hasBridge()) { // Android APK：原生导出
+    // PDF / PNG 优先走线条小狗模板渲染；不可用（模板缺失/空列表）时回退旧路径
+    if ((fmt === "pdf" || fmt === "png") && window.VH_ExportTemplate
+        && await exportViaTemplate(fmt, name)) return;
+
+    const html = await buildExportHTML(exportState.style); // await：先确保词典数据完整再导出
+    if (hasBridge()) { // Android APK：原生导出（Word 及模板回退场景）
       window.AndroidBridge.exportFile(name, fmt, html);
       showToast(`导出中 · ${fmt.toUpperCase()}…`);
       return;
@@ -3084,6 +3830,7 @@ $("#export-btn").addEventListener("click", async () => {
       showToast(`已导出 ${name}.png`);
     }
   } catch (err) {
+    console.error(`[export] failed: ${err && (err.stack || err.message || err)}`);
     showToast("导出失败，请重试");
   }
 });

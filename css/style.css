@@ -1561,6 +1561,157 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
 }
 
 /* ================================================================
+   MCQ 选择题 — 选项卡片 + 反馈状态 + 长按浮层
+   ================================================================ */
+
+/* MCQ 容器：复用 .rv-meaning 布局，选项区替代底部操作区 */
+.rv-mcq {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 题目区：释义展示（m2w 模式）—— 支持多行完整释义 */
+.rv-mcq-question {
+  font-size: 17px;
+  font-weight: 580;
+  letter-spacing: -0.005em;
+  line-height: 1.65;
+  color: var(--text);
+  text-align: center;
+  max-width: 340px;
+  max-height: 28vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* 提示文案 */
+.rv-mcq-hint {
+  margin-top: 12px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  color: var(--text-3);
+}
+
+/* 选项区：4 个卡片纵向排列，居中且宽度自适应 */
+.rv-mcq-options {
+  flex: none;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 24px calc(var(--sab) + 30px);
+}
+
+/* 选项卡片：圆角矩形，可点击 —— 支持多行释义显示 */
+.rv-mcq-option {
+  width: 100%;
+  padding: 14px 18px;
+  border: 1.5px solid var(--hairline-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: 480;
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: transform var(--t-fast) var(--ease), border-color var(--t-fast) ease, background var(--t-fast) ease;
+  animation: rowIn 0.3s var(--ease) both;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.rv-mcq-option:nth-child(1) { animation-delay: 0ms; }
+.rv-mcq-option:nth-child(2) { animation-delay: 50ms; }
+.rv-mcq-option:nth-child(3) { animation-delay: 100ms; }
+.rv-mcq-option:nth-child(4) { animation-delay: 150ms; }
+
+.rv-mcq-option:active {
+  transform: scale(0.98);
+  background: var(--surface-2);
+}
+
+/* 正确状态：绿色边框 + 淡绿背景 */
+.rv-mcq-option.correct {
+  border-color: #34C759;
+  background: rgba(52, 199, 89, 0.10);
+  color: #1B7D35;
+}
+html[data-theme="dark"] .rv-mcq-option.correct {
+  border-color: #30D158;
+  background: rgba(48, 209, 88, 0.14);
+  color: #43D473;
+}
+
+/* 错误状态：红色边框 + 淡红背景 */
+.rv-mcq-option.wrong {
+  border-color: #FF3B30;
+  background: rgba(255, 59, 48, 0.08);
+  color: #C93026;
+}
+html[data-theme="dark"] .rv-mcq-option.wrong {
+  border-color: #FF453A;
+  background: rgba(255, 69, 58, 0.12);
+  color: #FF6A61;
+}
+
+/* 揭示正确答案（用户选错时，正确选项显示绿色边框） */
+.rv-mcq-option.reveal-correct {
+  border-color: #34C759;
+  background: rgba(52, 199, 89, 0.06);
+}
+html[data-theme="dark"] .rv-mcq-option.reveal-correct {
+  border-color: #30D158;
+  background: rgba(48, 209, 88, 0.10);
+}
+
+/* 长按浮层：居中半透明遮罩，显示反向信息 */
+.rv-mcq-longpress {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: mcqOverlayIn 0.2s var(--ease);
+}
+.rv-mcq-longpress-card {
+  width: min(360px, 90vw);
+  max-height: 70vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 24px 22px 20px;
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
+  animation: rvPop 0.3s var(--ease);
+}
+.rv-mcq-longpress-card .detail-word { margin-bottom: 4px; }
+.rv-mcq-longpress-card .detail-phonetic { margin-top: 4px; }
+.rv-mcq-longpress-card .detail-meaning { margin-top: 6px; }
+.rv-mcq-longpress-card .detail-meta { margin-top: 14px; }
+@keyframes mcqOverlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 过渡页 MCQ 正确率 */
+.rv-transition-mcq {
+  font-size: 13px;
+  color: var(--text-2);
+  margin-top: -6px;
+  margin-bottom: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================
    响应式适配
    ================================================================ */
 
@@ -1982,6 +2133,11 @@ html[data-theme="dark"] .line-daily { stroke: #FF9F0A; }
 .chart-dot.dot-cum { fill: var(--surface); stroke: var(--accent); }
 .chart-dot.dot-daily { fill: var(--surface); stroke: #FF9500; }
 html[data-theme="dark"] .chart-dot.dot-daily { stroke: #FF9F0A; }
+/* 折线图点选交互：整列透明命中区 + 选中日高亮（虚线引导线 / 数据点放大 / 日期强调） */
+.chart-hit { pointer-events: all; }
+.chart-sel-line { stroke: var(--hairline-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-dot.sel { stroke-width: 2; }
+.chart-x.sel { fill: var(--accent); font-weight: 700; }
 .chart-empty {
   padding: 30px 16px;
   text-align: center;

@@ -494,6 +494,10 @@
     ov.classList.remove("visible");
     sheet.classList.remove("open");
     sheet.setAttribute("aria-hidden", "true");
+    // 焦点残留清理：实验名称输入框若仍持有焦点，菜单关闭后键盘不收起，
+    // 跨页后与其他输入框（如首页搜索）产生焦点/键盘交接 → 立即 blur 切断
+    var nameIn = $("#ml-menu-name");
+    if (nameIn) nameIn.blur();
   }
 
   function menuOpened() {

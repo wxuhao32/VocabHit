@@ -30,8 +30,20 @@ verify/
 
 # ===== Python / Node 脚本 =====
 *.py
+
+# ===== 图片（默认排除截图等无意义图片，但保留应用资源） =====
 *.png
 *.jpg
+# 保留 Android 应用图标与资源
+!android/app/src/main/res/**/*.png
+!android/app/src/main/res/**/*.jpg
+# 保留导出模板背景图（线条小狗）
+!android/app/src/main/assets/www/线条小狗.png
+!android/app/src/main/assets/www/线条小狗2.png
+!线条小狗.png
+!线条小狗2.png
+# 保留应用图标
+!VH icon.png
 
 # ===== AI 工具 / 编辑器脚手架 =====
 .codebuddy/

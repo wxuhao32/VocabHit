@@ -622,26 +622,13 @@
   });
   q.addEventListener("input", () => {
     const v = q.value.trim().toLowerCase();
-    // 内容与已记录词不同 = 旧会话失效（之后再次命中算新查询）
+    // 内容与已记录词不同 = 旧会话失效（之后点击进入详情算新查询）
     if (v !== sessionWord) {
       sessionWord = null;
       sessionConfirmed = null;
     }
-    // 输入即查：精确命中词典 = 查询已实际完成 → 记入历史（不进生词本）
-    if (v && v !== sessionWord) {
-      const hit = entry(v); // 考研或 ECDICT 已加载分片
-      if (hit) {
-        recordHistory(v);
-        sessionWord = v;
-      } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
-        window.ECDICT.getAsync(v).then((d) => {
-          if (d && v !== sessionWord && q.value.trim().toLowerCase() === v) {
-            recordHistory(v);
-            sessionWord = v;
-          }
-        });
-      }
-    }
+    // 实时搜索只刷新候选/反查列表，不记录查询次数：
+    // 统计触发点统一为「点击词条并成功进入详情」或「回车确认」。
     const raw = q.value.trim();
     if (!raw) {
       // 搜索词清空：正确清理词条内容（innerHTML 整体替换销毁旧词条 View/背景/阴影），

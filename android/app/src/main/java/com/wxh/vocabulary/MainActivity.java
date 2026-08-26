@@ -4,10 +4,13 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.pdf.PdfDocument;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -22,14 +25,18 @@ import android.provider.MediaStore;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
+import android.util.Base64;
 import android.view.View;
 import android.view.WindowInsets;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
 
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
+
+import org.json.JSONArray;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -45,7 +52,9 @@ import java.util.Locale;
  * Vocabulary — 本地生词查询工具 WebView 壳。
  * 前端全部位于 assets/www，离线运行；localStorage 承担数据持久化。
  * AndroidBridge：
- *   exportFile(name, fmt, html)          导出 pdf / word / png
+ *   exportFile(name, fmt, html)          导出 pdf / word / png（Word 与模板回退路径）
+ *   exportPdfImages(name, dataUrlsJson)  线条小狗模板多页 PDF（前端逐页 JPEG）
+ *   exportImageFile(name, dataUrl)       线条小狗模板长图 PNG
  *   setSystemBarsDark(dark)              状态栏/导航栏图标随主题
  *   canDrawOverlays() / requestOverlayPermission() / setOverlayEnabled(on)
  *                                        后台悬浮查词（系统级 Overlay）
@@ -73,12 +82,28 @@ public class MainActivity extends Activity {
         webView.getSettings().setDomStorageEnabled(true);   // localStorage 持久化
         webView.getSettings().setDatabaseEnabled(true);
         webView.getSettings().setAllowFileAccess(true);
+        // file:///android_asset 页面加载 file:// 模板图（线条小狗.png）需视为同源，
+        // 否则 Canvas 被污染，toDataURL 抛 SecurityError（PDF/PNG 导出共用此链路）。
+        // 应用内容全部来自自带 assets，无外部页面进入本 WebView，开启无风险。
+        webView.getSettings().setAllowFileAccessFromFileURLs(true);
         webView.getSettings().setTextZoom(100);
         // 禁用一切缩放：防止聚焦输入框时 WebView 自动放大导致 UI 累积变大
         webView.getSettings().setSupportZoom(false);
         webView.getSettings().setBuiltInZoomControls(false);
         webView.getSettings().setDisplayZoomControls(false);
         webView.setBackgroundColor(Color.parseColor("#F7F7F8"));
+        // 前端 console.* → logcat（VocabJS 标签）：APK 环境问题可被日志直接定位
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onConsoleMessage(android.webkit.ConsoleMessage cm) {
+                android.util.Log.d("VocabJS", cm.message() + " -- " + cm.sourceId() + ":" + cm.lineNumber());
+                return true;
+            }
+        });
+        // debug 构建开启 WebView 远程调试（chrome://inspect），release 不受影响
+        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, String url) {
@@ -365,6 +390,43 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void exportFile(final String name, final String fmt, final String html) {
             runOnUiThread(() -> startExport(name, fmt, html));
+        }
+
+        /** 线条小狗模板多页 PDF：前端已把每页渲染为 JPEG（dataURL 数组），
+            原生直接拼装 PdfDocument 存入 Downloads，不再弹系统打印对话框 */
+        @JavascriptInterface
+        public void exportPdfImages(final String name, final String dataUrlsJson) {
+            android.util.Log.d("VocabExport", "exportPdfImages entry name=" + name
+                    + " jsonLen=" + (dataUrlsJson == null ? -1 : dataUrlsJson.length()));
+            new Thread(() -> {
+                try {
+                    byte[] pdf = buildPdfFromDataUrls(dataUrlsJson);
+                    if (pdf == null) { toast("导出失败：无有效页面"); return; }
+                    android.util.Log.d("VocabExport", "pdf assembled, bytes=" + pdf.length);
+                    runOnUiThread(() -> saveBytes(name + ".pdf", "application/pdf", pdf));
+                } catch (Exception e) {
+                    android.util.Log.e("VocabExport", "exportPdfImages failed", e);
+                    runOnUiThread(() -> toast("导出失败：" + e.getMessage()));
+                }
+            }, "vh-pdf-export").start();
+        }
+
+        /** 线条小狗模板长图 PNG：前端已拼好整张长图，直接解码保存 */
+        @JavascriptInterface
+        public void exportImageFile(final String name, final String dataUrl) {
+            android.util.Log.d("VocabExport", "exportImageFile entry name=" + name
+                    + " dataUrlLen=" + (dataUrl == null ? -1 : dataUrl.length()));
+            new Thread(() -> {
+                try {
+                    byte[] png = dataUrlBytes(dataUrl);
+                    if (png == null) { toast("导出失败：无有效图片"); return; }
+                    android.util.Log.d("VocabExport", "png decoded, bytes=" + png.length);
+                    runOnUiThread(() -> saveBytes(name + ".png", "image/png", png));
+                } catch (Exception e) {
+                    android.util.Log.e("VocabExport", "exportImageFile failed", e);
+                    runOnUiThread(() -> toast("导出失败：" + e.getMessage()));
+                }
+            }, "vh-png-export").start();
         }
 
         /** 读取 ECDICT 分片数据（assets/www/data/ecdict-<letter>.js），返回整段 JS 文本；失败返回 null */
@@ -982,6 +1044,46 @@ public class MainActivity extends Activity {
         return wv;
     }
 
+    /* ---------- 线条小狗模板导出：前端页面图 → 多页 PDF ----------
+       页面尺寸按图片纵横比换算 pt（72/96），位图铺满整页；
+       每页背景均为同一张完整模板，与前端 Canvas 渲染结果一致 */
+    private byte[] buildPdfFromDataUrls(String json) throws Exception {
+        JSONArray arr = new JSONArray(json);
+        if (arr.length() == 0) return null;
+        PdfDocument doc = new PdfDocument();
+        try {
+            for (int i = 0; i < arr.length(); i++) {
+                byte[] bytes = dataUrlBytes(arr.getString(i));
+                if (bytes == null) continue;
+                Bitmap bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+                if (bmp == null) continue;
+                float pw = bmp.getWidth() * 72f / 96f;
+                float ph = bmp.getHeight() * 72f / 96f;
+                PdfDocument.Page page = doc.startPage(
+                        new PdfDocument.PageInfo.Builder(Math.round(pw), Math.round(ph), i + 1).create());
+                android.graphics.Rect dst = new android.graphics.Rect(
+                        0, 0, Math.round(pw), Math.round(ph));
+                page.getCanvas().drawBitmap(bmp, null, dst, null);
+                doc.finishPage(page);
+                bmp.recycle();
+            }
+            if (doc.getPages().size() == 0) return null;
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            doc.writeTo(bos);
+            return bos.toByteArray();
+        } finally {
+            doc.close();
+        }
+    }
+
+    /** dataURL → 原始字节；非法格式返回 null */
+    private static byte[] dataUrlBytes(String dataUrl) {
+        if (dataUrl == null) return null;
+        int comma = dataUrl.indexOf(',');
+        if (comma < 0) return null;
+        return Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT);
+    }
+
     /* ---------- 保存到 Downloads（MediaStore，Android 10+ 免权限） ---------- */
     private void saveBytes(String displayName, String mime, byte[] data) {
         try {
@@ -1005,7 +1107,9 @@ public class MainActivity extends Activity {
                 }
             }
             toast("已保存 · Downloads/" + displayName);
+            android.util.Log.d("VocabExport", "saved Downloads/" + displayName + " bytes=" + data.length);
         } catch (Exception e) {
+            android.util.Log.e("VocabExport", "saveBytes failed: " + displayName, e);
             toast("保存失败：" + e.getMessage());
         }
     }

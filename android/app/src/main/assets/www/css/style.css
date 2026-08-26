@@ -1982,6 +1982,11 @@ html[data-theme="dark"] .line-daily { stroke: #FF9F0A; }
 .chart-dot.dot-cum { fill: var(--surface); stroke: var(--accent); }
 .chart-dot.dot-daily { fill: var(--surface); stroke: #FF9500; }
 html[data-theme="dark"] .chart-dot.dot-daily { stroke: #FF9F0A; }
+/* 折线图点选交互：整列透明命中区 + 选中日高亮（虚线引导线 / 数据点放大 / 日期强调） */
+.chart-hit { pointer-events: all; }
+.chart-sel-line { stroke: var(--hairline-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-dot.sel { stroke-width: 2; }
+.chart-x.sel { fill: var(--accent); font-weight: 700; }
 .chart-empty {
   padding: 30px 16px;
   text-align: center;

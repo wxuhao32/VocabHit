@@ -1003,6 +1003,7 @@ function renderSpell(body) {
       <input class="rv-spell-input ${inputClass}" 
              id="spell-input" 
              type="text" 
+             enterkeyhint="done"
              placeholder="输入英文单词" 
              autocomplete="off" 
              autocapitalize="off" 
@@ -1025,6 +1026,27 @@ function renderSpell(body) {
       saveReviewSession();
       // 移除错误样式
       input.classList.remove("error");
+    });
+    /* Android IME「回车 / 下一步 / 完成」键 = 点击「确认」：
+       preventDefault 拦截 WebView 默认行为（焦点后移 / 聚焦元素滚入视野 → 界面整体上移）；
+       再触发 #spell-submit.click()，走与「确认」按钮完全相同的委托链路
+       （同一 300ms 防抖 + 同一 submitSpell 判定，不引入第二套判断机制）。
+       组词中的回车（isComposing / keyCode 229，输入法用于候选词确认）不拦截 */
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      const isEnter = e.key === "Enter" || e.keyCode === 13 || e.which === 13;
+      if (!isEnter) return;
+      e.preventDefault();
+      const btn = $("#spell-submit");
+      if (btn) btn.click();
+      // 双保险：复位滚动，杜绝个别 ROM / 输入法仍把页面整体上移（键盘不受影响）
+      const stabilize = () => {
+        window.scrollTo(0, 0);
+        const screen = body.firstElementChild;
+        if (screen) screen.scrollTop = 0;
+      };
+      stabilize();
+      requestAnimationFrame(stabilize);
     });
     setTimeout(() => {
       input.focus();
@@ -1494,6 +1516,7 @@ function showHabitDay(dayStr) {
 function fmtStatMin(m) { return m >= 10 ? String(Math.round(m)) : String(Math.round(m * 10) / 10); }
 
 /** 柱状图（近 7 天复习数量：红=词汇 蓝=知识点；组内双柱 + 顶部数值） */
+let statsLineSel = null; // 折线图选中日索引（null = 默认显示今日）
 function statsBarChartSVG(days) {
   const W = 340, H = 148, padT = 18, padB = 20, padX = 6;
   const ih = H - padT - padB;
@@ -1508,8 +1531,11 @@ function statsBarChartSVG(days) {
     if (hv) bars += `<rect class="bar-vocab" x="${(cx - bw - 1.2).toFixed(1)}" y="${(H - padB - hv).toFixed(1)}" width="${bw.toFixed(1)}" height="${hv.toFixed(1)}" rx="2"/>`;
     if (he) bars += `<rect class="bar-entry" x="${(cx + 1.2).toFixed(1)}" y="${(H - padB - he).toFixed(1)}" width="${bw.toFixed(1)}" height="${he.toFixed(1)}" rx="2"/>`;
     if (d.vocab || d.entry) {
-      const top = Math.min(H - padB - hv, H - padB - he) - 4;
-      texts += `<text class="chart-val" x="${cx.toFixed(1)}" y="${top.toFixed(1)}">${d.vocab}·${d.entry}</text>`;
+      // 数值标签：每根柱单独标注自己的数量，水平居中于该柱顶部正上方（不再组合成 5/1 格式）。
+      // y 各自跟随本柱柱顶：柱高不同时两个数字一高一低，始终位于各自柱顶；
+      // 水平居中由 .chart-val 的 text-anchor: middle 保证；保留既有 1px 左移修正。
+      if (hv) texts += `<text class="chart-val" x="${(cx - bw / 2 - 1.2 - 1).toFixed(1)}" y="${(H - padB - hv - 4).toFixed(1)}">${d.vocab}</text>`;
+      if (he) texts += `<text class="chart-val" x="${(cx + bw / 2 + 1.2 - 1).toFixed(1)}" y="${(H - padB - he - 4).toFixed(1)}">${d.entry}</text>`;
     }
     texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${cx.toFixed(1)}" y="${H - 6}">${d.label}</text>`;
   });
@@ -1520,39 +1546,63 @@ function statsBarChartSVG(days) {
   </svg>`;
 }
 
-/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长；双刻度，各自归一） */
-function statsLineChartSVG(days) {
+/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长）
+    累计与每日同单位（分钟）→ 共用同一纵轴刻度：等值必然同高、累计≥每日必然不低于每日，
+    线条位置与左侧参考刻度严格一致（修正旧版双刻度各自归一的视觉失真：
+    曾出现累计 2.8 > 今日 1.4 两线却交汇同一点、同为 1.4 却一高一低）
+    sel：选中日索引（null = 默认今日）；点击某天数据列切换显示该日数据，点击图表外恢复今日 */
+function statsLineChartSVG(days, sel) {
   const W = 340, H = 148, padL = 30, padR = 30, padT = 18, padB = 20;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const maxC = Math.max(1, ...days.map((d) => d.cumMin));
-  const maxD = Math.max(1, ...days.map((d) => d.dailyMin));
+  const maxV = Math.max(1, ...days.map((d) => d.cumMin), ...days.map((d) => d.dailyMin));
   const x = (i) => padL + (iw * i) / (days.length - 1);
-  const yC = (v) => H - padB - (v / maxC) * ih;
-  const yD = (v) => H - padB - (v / maxD) * ih;
-  let grid = "", dots = "", texts = "";
+  const yOf = (v) => H - padB - (v / maxV) * ih;
+  const active = sel != null && sel >= 0 && sel < days.length; // 是否用户点选过
+  const si = active ? sel : days.length - 1; // 默认选中今日（最后一天）
+  const colW = iw / (days.length - 1);
+  let grid = "", dots = "", texts = "", hits = "";
   [1, 0.5, 0].forEach((f) => {
     const y = (H - padB - f * ih).toFixed(1);
     grid += `<line class="chart-grid" x1="${padL}" x2="${W - padR}" y1="${y}" y2="${y}"/>`;
-    texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxC * f)}</text>`;
-    texts += `<text class="chart-axis-label" x="${W - padR + 4}" y="${Number(y) + 3}">${fmtStatMin(maxD * f)}</text>`;
+    // 单一纵轴：仅左侧一组参考刻度（右侧不再独立成另一套刻度，避免数值误导）
+    texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxV * f)}</text>`;
   });
-  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yC(d.cumMin).toFixed(1)}`).join(" ");
-  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yD(d.dailyMin).toFixed(1)}`).join(" ");
+  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.cumMin).toFixed(1)}`).join(" ");
+  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.dailyMin).toFixed(1)}`).join(" ");
   days.forEach((d, i) => {
-    dots += `<circle class="chart-dot dot-cum" cx="${x(i).toFixed(1)}" cy="${yC(d.cumMin).toFixed(1)}" r="2.4"/>`;
-    dots += `<circle class="chart-dot dot-daily" cx="${x(i).toFixed(1)}" cy="${yD(d.dailyMin).toFixed(1)}" r="2.4"/>`;
-    texts += `<text class="chart-x${d.isToday ? " today" : ""}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
+    const cls = i === si && active ? " sel" : "";
+    const r = i === si && active ? 3.2 : 2.4;
+    dots += `<circle class="chart-dot dot-cum${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.cumMin).toFixed(1)}" r="${r}"/>`;
+    dots += `<circle class="chart-dot dot-daily${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.dailyMin).toFixed(1)}" r="${r}"/>`;
+    texts += `<text class="chart-x${d.isToday ? " today" : ""}${cls}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
+    // 整列透明命中区（置顶）：点中某天数据点/所在列即选中该天，触屏更易命中
+    const hx0 = i === 0 ? 0 : x(i) - colW / 2;
+    const hx1 = i === days.length - 1 ? W : x(i) + colW / 2;
+    hits += `<rect class="chart-hit" data-li="${i}" x="${hx0.toFixed(1)}" y="0" width="${(hx1 - hx0).toFixed(1)}" height="${H}" fill="transparent"/>`;
   });
-  const last = days.length - 1;
-  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yC(days[last].cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(days[last].cumMin)}</text>`;
-  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yD(days[last].dailyMin) + 12).toFixed(1)}" text-anchor="end">今日 ${fmtStatMin(days[last].dailyMin)}</text>`;
-  return `<svg class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
+  const sd = days[si];
+  // 数值标注与选中日数据点一一对应（默认今日）：累计 = 实线当日的值，日期标注 = 虚线当日学习时长
+  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yOf(sd.cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(sd.cumMin)}</text>`;
+  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yOf(sd.dailyMin) + 12).toFixed(1)}" text-anchor="end">${sd.isToday ? "今日" : sd.label} ${fmtStatMin(sd.dailyMin)}</text>`;
+  return `<svg id="stats-line-chart" class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
     ${grid}
+    ${active ? `<line class="chart-sel-line" x1="${x(si).toFixed(1)}" x2="${x(si).toFixed(1)}" y1="${padT}" y2="${H - padB}"/>` : ""}
     <polyline class="line-cum" points="${ptsC}"/>
     <polyline class="line-daily" points="${ptsD}"/>
     ${dots}
     ${texts}
+    ${hits}
   </svg>`;
+}
+
+/** 折线图选中日切换后仅重绘该 SVG（不重渲染整块看板，无滚动跳动） */
+function statsLineRender() {
+  const old = $("#stats-line-chart");
+  if (!old || !window.VH_STATS) return;
+  const tpl = document.createElement("div");
+  tpl.innerHTML = statsLineChartSVG(VH_STATS.last7(), statsLineSel);
+  const fresh = tpl.firstElementChild;
+  if (fresh) old.replaceWith(fresh);
 }
 
 /** 坚持看板渲染（连续天数 / 最长 / 已完成 / 可切换月份日历 / 目标日期标记 / 点击日期查看 / 学习统计） */
@@ -1641,7 +1691,7 @@ function renderHabits() {
         <p class="section-eyebrow">学习时间 · 近 7 天</p>
         <div class="chart-legend"><span class="lg"><span class="ln ln-cum"></span>累计</span><span class="lg"><span class="ln ln-daily"></span>今日</span></div>
       </div>
-      ${lineHasData ? statsLineChartSVG(d7) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
+      ${lineHasData ? statsLineChartSVG(d7, statsLineSel) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
     </section>`;
   }
 
@@ -2405,6 +2455,13 @@ function openHabits() {
 $("#tasks-entry").addEventListener("click", openTasks);
 $("#habits-entry").addEventListener("click", openHabits);
 $("#habits-body").addEventListener("click", (e) => {
+  // 折线图点选：命中某天数据列 → 切换显示该日的累计/学习时长（数据点、日期、时长一一对应）
+  const hit = e.target.closest(".chart-hit");
+  if (hit) {
+    statsLineSel = Number(hit.dataset.li);
+    statsLineRender();
+    return;
+  }
   const nav = e.target.closest("[data-nav]");
   if (nav) {
     if (nav.dataset.nav === "prev") habitsShift(-1);
@@ -2414,6 +2471,16 @@ $("#habits-body").addEventListener("click", (e) => {
   }
   const day = e.target.closest(".cal-cell[data-day]");
   if (day) { showHabitDay(day.dataset.day); return; }
+});
+
+/* 折线图点选恢复：点击图表以外任意位置 → 回到默认今日显示；
+   命中区自身（含重绘后已脱离 DOM 的元素，closest 仍可自匹配）不触发恢复 */
+document.addEventListener("click", (e) => {
+  if (statsLineSel === null) return;
+  if (!e.target || !e.target.closest) return;
+  if (e.target.closest(".chart-hit") || e.target.closest("#stats-line-chart")) return;
+  statsLineSel = null;
+  statsLineRender();
 });
 $("#tasks-body").addEventListener("click", (e) => {
   const check = e.target.closest(".task-check");
@@ -2713,29 +2780,13 @@ sheetOverlay.addEventListener("click", closeSheet);
 
 sheetInput.addEventListener("input", (e) => {
   const v = e.target.value.trim().toLowerCase();
-  // 内容与已记录词不同 = 旧会话失效（之后再次命中算新查询）
+  // 内容与已记录词不同 = 旧会话失效（之后点击进入详情算新查询）
   if (v !== sessionWord) {
     sessionWord = null;
     sessionConfirmed = null;
   }
-  // 输入即查：输入内容精确命中词典 = 查询已实际完成 → 记入历史查询记录（不进生词本）
-  if (v && v !== sessionWord) {
-    const hit = dictGet(v); // 考研或 ECDICT 已加载分片
-    if (hit) {
-      recordHistory(v);
-      sessionWord = v;
-      renderAll();
-    } else if (/^[a-z][a-z' .\-]*$/.test(v)) {
-      // ECDICT 分片未加载：异步确认后补记（输入已变化则作废，防竞态）
-      dictGetAsync(v).then((d) => {
-        if (d && v !== sessionWord && sheetInput.value.trim().toLowerCase() === v) {
-          recordHistory(v);
-          sessionWord = v;
-          renderAll();
-        }
-      });
-    }
-  }
+  // 实时搜索只刷新候选/反查列表，不记录查询次数：
+  // 统计触发点统一为「点击词条并成功进入详情」或「回车确认」（commitQuery）。
   renderSheetResults(e.target.value);
 });
 
@@ -3060,14 +3111,65 @@ function showToast(msg) {
   toastTimer = setTimeout(() => toast.classList.remove("show"), 2200);
 }
 
+/** 模板化导出（PDF / PNG）：线条小狗整页背景 + 双板块词条排版，
+    详见 js/export-template.js。词条数据与现有导出同口径（导出前
+    dictGetAsync 预加载，保证音标/释义完整）。
+    模板缺失 / 空列表 / 超页数上限 → 返回 false，调用方回退旧导出路径。 */
+async function exportViaTemplate(fmt, name) {
+  const T = window.VH_ExportTemplate;
+  rolloverIfNeeded();
+  const words = exportWords();
+  if (!words.length) return false;
+  await Promise.all(words.map((w) => dictGetAsync(w)));
+  const isStarred = exportState.content === "starred";
+  const entries = words.map((w) => {
+    const m = wordMeta(w);
+    return {
+      word: w,
+      meta: isStarred ? `累计 ${m.total} 次查询` : `今日 ${m.today} 次 · 累计 ${m.total} 次`,
+      phonetic: phoneticOf(w),
+      lines: senseLines(w),
+    };
+  });
+  const canvases = await T.renderPages(entries);
+  console.log(`[export] renderPages -> ${canvases ? canvases.length + " page(s)" : "null (fallback)"}`);
+  if (!canvases) return false;
+  if (hasBridge()) { // Android：原生拼装多页 PDF / 长图 PNG，直接存入 Downloads
+    if (fmt === "pdf") {
+      const payload = JSON.stringify(canvases.map(T.canvasJpegDataUrl));
+      console.log(`[export] bridge exportPdfImages payloadLen=${payload.length}`);
+      window.AndroidBridge.exportPdfImages(name, payload);
+      console.log("[export] bridge exportPdfImages call returned");
+    } else {
+      const dataUrl = T.stackedPngDataUrl(canvases);
+      console.log(`[export] bridge exportImageFile dataUrlLen=${dataUrl.length} prefix=${dataUrl.slice(0, 32)}`);
+      window.AndroidBridge.exportImageFile(name, dataUrl);
+      console.log("[export] bridge exportImageFile call returned");
+    }
+    showToast(`导出中 · ${fmt.toUpperCase()}…`);
+    return true;
+  }
+  if (fmt === "pdf") {
+    downloadBlob(await T.canvasesToPdfBlob(canvases), `${name}.pdf`);
+  } else {
+    downloadBlob(await T.stackedPngBlob(canvases), `${name}.png`);
+  }
+  showToast(`已导出 ${name}.${fmt}`);
+  return true;
+}
+
 $("#export-btn").addEventListener("click", async () => {
   rolloverIfNeeded(); // 跨 04:00 先滚动业务日（与导出内容口径一致）
-  const html = await buildExportHTML(exportState.style); // await：先确保词典数据完整再导出
   const dateStr = vocabDay(); // 业务日期（04:00 切换点），非 UTC/自然日期
   const fmt = exportState.format;
   const name = exportState.content === "starred" ? `生词本-历史-${dateStr}` : `生词本-${dateStr}`;
   try {
-    if (hasBridge()) { // Android APK：原生导出
+    // PDF / PNG 优先走线条小狗模板渲染；不可用（模板缺失/空列表）时回退旧路径
+    if ((fmt === "pdf" || fmt === "png") && window.VH_ExportTemplate
+        && await exportViaTemplate(fmt, name)) return;
+
+    const html = await buildExportHTML(exportState.style); // await：先确保词典数据完整再导出
+    if (hasBridge()) { // Android APK：原生导出（Word 及模板回退场景）
       window.AndroidBridge.exportFile(name, fmt, html);
       showToast(`导出中 · ${fmt.toUpperCase()}…`);
       return;
@@ -3084,6 +3186,7 @@ $("#export-btn").addEventListener("click", async () => {
       showToast(`已导出 ${name}.png`);
     }
   } catch (err) {
+    console.error(`[export] failed: ${err && (err.stack || err.message || err)}`);
     showToast("导出失败，请重试");
   }
 });

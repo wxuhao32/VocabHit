@@ -201,10 +201,22 @@
     if (CV.menuOpened()) CV.closeMenu();
     if (P.actionsOpened()) P.closeActions();
     if (P.dialogOpened()) P.closeDialog();
+    // 焦点残留清理：浮层内输入框（如 #ml-menu-name）若仍持有焦点，
+    // 键盘不会收起，且下一次首页搜索聚焦输入框时产生跨模块焦点/键盘交接 → 一律 blur
+    var a = document.activeElement;
+    if (a && a.closest && a.closest("#ml-menu-sheet, #ml-psheet, .ml-dlg-mask")) a.blur();
   }
 
   function anyMathPageActive() {
     return !!document.querySelector("#page-math-lab.active, #page-math-config.active, #page-math-canvas.active");
+  }
+
+  /* 作用域同步：body.ml-lab-scope 表示当前处于 Math Lab 上下文。
+     CSS 依据该类对本模块全部浮层做硬门控（非作用域内 visibility:hidden +
+     pointer-events:none）——无论残留 .open/.visible 来自何种路径与时序，
+     在 Math Lab 页面之外物理不可见、不可交互，从渲染层面根绝串层。 */
+  function syncScope() {
+    document.body.classList.toggle("ml-lab-scope", anyMathPageActive());
   }
 
   /* ================= 事件绑定 ================= */
@@ -257,10 +269,16 @@
       var appRoot = document.getElementById("app");
       if (appRoot) {
         new MutationObserver(function () {
+          syncScope();
           if (!anyMathPageActive()) forceCloseAllLayers();
         }).observe(appRoot, { subtree: true, attributes: true, attributeFilter: ["class"] });
       }
     }
+
+    // 初始同步一次作用域，并清理任何启动前残留（含 WebView 状态恢复场景）：
+    // 启动态必为首页，Math Lab 浮层一律强制关闭 + 作用域关闭，不留任何残留可被后续唤起。
+    syncScope();
+    forceCloseAllLayers();
 
     // 视图保存后同步主页列表（最近实验顺序/名称可能变化）
     ML.onExperimentChanged = renderRecent;
