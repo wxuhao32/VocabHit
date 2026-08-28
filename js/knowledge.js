@@ -327,15 +327,16 @@
   const EXPAND_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9"/></svg>';
 
   function injectShell() {
-    // 首页入口（复用既有 .review-entry 视觉，插在「坚持看板」之后）
-    const anchor = document.getElementById("habits-entry");
+    // 首页「工具」2x2 网格：Knowledge / 存储库入口追加到 #tool-grid（降级兼容无网格的旧结构）
+    const anchor = document.getElementById("tool-grid") || document.getElementById("habits-entry");
+    const method = anchor && anchor.id === "tool-grid" ? "beforeend" : "afterend";
     if (anchor) {
-      anchor.insertAdjacentHTML("afterend", `
+      anchor.insertAdjacentHTML(method, `
         <button class="review-entry" id="kn-entry" type="button">
           <span class="review-entry-icon">${BOOK_SVG}</span>
           <span class="review-entry-main">
-            <span class="review-entry-title">Knowledge · 学习资料</span>
-            <span class="review-entry-sub" id="kn-entry-sub">上传文档 · 长按摘取知识点</span>
+            <span class="review-entry-title">Knowledge</span>
+            <span class="review-entry-sub" id="kn-entry-sub">学习资料</span>
           </span>
           <svg class="icon icon-s review-entry-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
         </button>

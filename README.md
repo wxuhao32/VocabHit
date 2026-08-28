@@ -1,10 +1,10 @@
 # VocabHit
 
-考研向的本地优先英语词汇 App：离线词典 / 生词本 / 艾宾浩斯复习 / 知识库 / Math Canvas / 划重点 / 悬浮窗查词。
+考研向的本地优先英语词汇 App：离线词典 / 生词本 / 艾宾浩斯复习 / 知识库 / Math Canvas / 划重点 / 悬浮窗查词 / 考研释义分级 / 学习提醒。
 
 纯前端 + Android WebView，无第三方运行时框架依赖，单 APK 就能跑。
 
-> 当前版本：v1.0.7（versionCode 80）· Android minSdk 26 / targetSdk 34
+> 当前版本：v1.1.1（versionCode 84）· Android minSdk 26 / targetSdk 34
 
 ---
 
@@ -12,6 +12,7 @@
 
 ### 词典 / 生词
 - **离线词典查询**：基于 [ECDICT](https://github.com/skywind3000/ECDICT) 开源词库，本地分片打包，支持 20 万+ 词条
+- **考研词汇释义分级（KY Level）**：对考研词汇书的每个释义自动标注 common（常见·绿）/ normal（一般·黄）/ rare（生僻·灰）三级，人工标注优先、算法兜底；高频词的特殊义项右上角标注「僻」字（熟词僻义），帮你在阅读中精准识别考点
 - **生词三级分类**：今日生词 / 历史生词 / 查询记录
 - **拼写复习（Spelling）**：输入 → 确认 → 翻页，错词留底、正确即过，音频提示辅助
 - **艾宾浩斯曲线复习（Review）**：基于 Ebbinghaus 遗忘曲线智能排期，含手动重置 / 跳过 / 长期状态锁定
@@ -32,6 +33,16 @@
 ### 悬浮窗
 - **全局悬浮查词**：其他 App 顶部浮窗选中即查，与主应用数据同步
 
+### 学习提醒（Reminder）
+- **系统级精确闹钟**：基于 Android `AlarmManager` 精确闹钟，App 进程被杀、WebView 未打开均不影响触发
+- **每日循环**：到点弹出通知提醒学习，点击通知直达应用；触发后自动排下一天，形成每日循环
+- **持久化恢复**：App 启动 / 系统重启 / 应用更新 / 时区变更时自动从偏好恢复排期，无需手动重设
+- **统一调度入口**：开 / 关 / 改时间走同一接口，旧闹钟被同一 PendingIntent 覆盖替换，不会重复提醒
+
+### 启动体验
+- **品牌闪屏（Splash）**：8 个字母从不同方向自然掉落拼成 "VocabHit"，动画由合成器线程驱动、不占主线程；与首页初始化完全并行，首页就绪即淡出，无白屏切换；异常情况下限 3.5 秒强制关闭兜底
+- **首页吉祥物**：线条小狗形象陪伴学习
+
 ---
 
 ## 技术栈
@@ -42,6 +53,7 @@
 | Android 壳 | 原生 WebView + Java 桥接（`@JavascriptInterface` 双向通信） |
 | 词典数据 | ECDICT 分片打包（MIT License），按字母 a~z + 标点分 27 个 JS 文件 |
 | 构建 | Gradle 8.9 / JDK 17 / Android minSdk 26 / targetSdk 34 |
+| 提醒 | `AlarmManager` 精确闹钟 + `BroadcastReceiver`，需 `SCHEDULE_EXACT_ALARM` 权限 |
 | OCR | Google ML Kit on-device（可选，导入扫描件用） |
 | 存储 | `localStorage`（Web 层）+ `SharedPreferences` / 内部存储（Android 层） |
 
@@ -347,20 +359,69 @@ case "add":
 
 ---
 
+### 4.7 考研词汇释义分级算法（KY Level）
+
+对考研词汇书（`js/dict.js` 的 `DICT_DATA`）的每个释义进行三级分类，ECDICT / 大词典 / 用户自建词条一律不参与（返回 null，走原有逻辑）。
+
+代码位于 `js/ky-level.js`，人工标注数据位于 `js/ky-manual.js`。
+
+#### 分级数据来源优先级
+
+1. **人工标注（`KY_MANUAL`）**：命中即返回人工结果，由人工逐条审视词书数据后判定，运行时直接读取、零分析。
+2. **算法兜底**：未人工标注的词，惰性构建全量映射，按「展平释义位置 + 单词词频排名」统一机制分类。
+
+#### 三级释义
+
+每个释义：`{ text, level: "common" | "normal" | "rare", obscure: bool }`
+
+| 级别 | 颜色 | 含义 |
+|------|------|------|
+| `common` | 绿 | 常见、通用释义 |
+| `normal` | 黄 | 一般常见释义 |
+| `rare` | 灰 | 少见、生僻、冷门释义 |
+| `obscure` | 右上角「僻」 | 考研「熟词僻义」标记 |
+
+#### 算法阈值（统一机制，全词书一致）
+
+```javascript
+const CFG = {
+  commonRatio: 0.4,     // 展平位置前 40% → common（绿）
+  rareRatio: 0.72,      // 展平位置后 28% → rare（灰）
+  wordRankRatio: 0.18,  // 词频前 18% 的常见单词才可能标「僻」
+  minN: 8,              // 释义数 < 8 不标「僻」（保守）
+  obscureRatio: 0.72,   // 释义项位于展平位置后 28% 才可能为「僻」
+  maxObscure: 1,        // 每词「僻」标记上限 1 条（宁可少标，不滥标）
+  maxLen: 4             // 复合/派生释义（>4 字）不算「僻」
+};
+```
+
+#### 生僻标签识别
+
+释义前缀形如 `[古]` / `[澳]` / `<美语>` / `[非标准用语、方言]` 等，自动识别为专业/生僻/冷门（rare 开信号）。
+
+#### 「僻」标记原则
+
+严格保守：宁可少标，不大量误标。仅当单词本身高频、该义与常见义明显不同、且考研阅读可能考察的特殊词义时才标注。
+
+---
+
 ## 目录结构
 
 ```
 VocabHit/
-├── index.html                 # 主应用入口
+├── index.html                 # 主应用入口（含 Splash 闪屏结构）
 ├── overlay.html               # 悬浮窗页面
 │
 ├── js/                        # 前端源码（与 assets/www 同步）
 │   ├── app.js                 # 主应用逻辑（复习算法 / MCQ / 拼写 / 词典）
-│   ├── dict.js                # 词典数据（ECDICT 预处理）
-│   ├── ecdict.js              # 词典加载器
+│   ├── dict.js                # 考研词汇书数据（DICT_DATA）
+│   ├── ecdict.js              # ECDICT 词典加载器
 │   ├── knowledge.js           # 知识库模块（导入 / 解析 / 高亮）
 │   ├── stats.js               # 每日任务 / 学习统计
 │   ├── export-template.js     # 导出模板
+│   ├── ky-level.js            # 考研词汇释义分级（common/normal/rare + 僻）
+│   ├── ky-manual.js           # 释义分级人工标注数据（优先于算法）
+│   ├── splash.js              # 启动闪屏动画（字母掉落拼字）
 │   ├── math-lab/              # Math Canvas 模块
 │   │   ├── mathCanvas.js      #   画布交互 + 工具栏
 │   │   ├── mathEngine.js      #   表达式解析 + 数值计算引擎
@@ -376,11 +437,18 @@ VocabHit/
 ├── css/                       # 样式
 │   ├── style.css              # 主样式
 │   ├── knowledge.css          # 知识库
+│   ├── ky-level.css           # 释义分级（绿/黄/灰 + 僻标记）
+│   ├── splash.css             # 启动闪屏
 │   ├── math-lab.css           # Math Canvas
 │   └── spaced-repetition.css  # 间隔重复
 │
+├── img/                       # 应用内图片资源
+│   ├── dog.png                # 首页吉祥物（线条小狗）
+│   └── mascot.png             # 吉祥物形象
+│
 ├── audio/                     # 音频资源
-│   └── next.mp3               # 拼写复习「下一题」提示音
+│   ├── next.mp3               # 拼写复习「下一题」提示音
+│   └── 错误提示音.mp3          # 操作错误提示音
 │
 ├── data/                      # ECDICT 词库分片（27 个 JS 文件）
 │   └── ecdict-{a-z,#}.js
@@ -390,13 +458,17 @@ VocabHit/
 │   │   ├── build.gradle
 │   │   └── src/main/
 │   │       ├── AndroidManifest.xml
-│   │       ├── assets/www/    # WebView 资源（与根 js/ css/ audio/ data/ 同步）
+│   │       ├── assets/www/    # WebView 资源（与根 js/ css/ img/ audio/ data/ 同步）
 │   │       ├── java/com/wxh/vocabulary/
 │   │       │   ├── MainActivity.java      # 主 Activity + WebView 桥
 │   │       │   ├── OverlayService.java    # 悬浮窗服务
 │   │       │   ├── DocumentParser.java    # 文档解析（Word/Excel/PDF/TXT）
-│   │       │   └── OcrParser.java         # ML Kit OCR 封装
-│   │       └── res/            # 图标 / 主题 / 颜色
+│   │       │   ├── OcrParser.java         # ML Kit OCR 封装
+│   │       │   ├── ReminderScheduler.java # 学习提醒调度中心（AlarmManager）
+│   │       │   ├── ReminderReceiver.java  # 提醒广播接收器（到点触发 + 排下一天）
+│   │       │   ├── ReminderPrefs.java     # 提醒偏好存储
+│   │       │   └── ReminderState.java     # 提醒状态管理
+│   │       └── res/            # 图标 / 主题 / 颜色 / 提醒通知图标
 │   ├── build.gradle
 │   ├── settings.gradle
 │   ├── gradle.properties
@@ -442,13 +514,14 @@ python -m http.server 8080
 # 浏览器打开 http://127.0.0.1:8080/
 ```
 
-注意：本地预览没有 WebView 桥接（悬浮窗 / 文档解析 / OCR 不可用），仅用于 UI 调试。
+注意：本地预览没有 WebView 桥接（悬浮窗 / 文档解析 / OCR / 学习提醒不可用），仅用于 UI 调试。
 
 ---
 
 ## 数据来源
 
 - **词库**：[skywind3000/ECDICT](https://github.com/skywind3000/ECDICT)（MIT License），20 万+ 词条，按首字母分片为 27 个 JS 文件随 APK 打包
+- **考研词汇书**：内置 `js/dict.js`，释义分级人工标注位于 `js/ky-manual.js`
 - **ML Kit OCR**：Google ML Kit on-device（可选能力，首次调用按需下载模型 ~10MB，设备本地推理）
 
 ---
@@ -459,6 +532,7 @@ python -m http.server 8080
 - **无广告 / 无统计 SDK / 无追踪**
 - 所有学习数据保存在设备本地 `localStorage`
 - 词典文件随 APK 打包，离线可用
+- 学习提醒使用系统 AlarmManager，不依赖任何后端推送
 - 不要求任何账号注册
 
 Clone 本仓库、构建 APK、装到任何 Android 8.0+ 设备，全程无需联网、无需注册。
@@ -479,6 +553,14 @@ A: 单一作者 + 长期维护 + 单 APK 分发，引入框架会让 APK 膨胀 
 
 A: 不是。两套系统完全独立、数据隔离、规则不同。生词 Review 有 daily/booster 模式且阶段不回退；知识库 SR 阶段可回退、间隔可自定义、支持提问/挖空考察方式。详见上方「核心算法详解」。
 
+**Q: 考研释义分级（KY Level）对所有词都生效吗？**
+
+A: 只对内置考研词汇书（`dict.js` 的 `DICT_DATA`）生效。ECDICT 查词、大词典、用户自建词条不参与分级，走原有展示逻辑。人工标注（`ky-manual.js`）优先，未标注的词由算法按展平位置 + 词频统一分类。
+
+**Q: 学习提醒在 App 关闭后还能响吗？**
+
+A: 能。提醒基于系统 `AlarmManager` 精确闹钟，不依赖 App 前台运行或后台 Service。到点由 `ReminderReceiver` 接收广播并弹出通知，点击通知直达应用。系统重启 / 应用更新 / 时区变更后会自动恢复排期。
+
 **Q: ML Kit 一定要装吗？**
 
 A: 不装也能用，只是知识库的 OCR 识别功能不可用。首次调用会按需下载 OCR 模型（~10MB），设备本地推理。
@@ -490,9 +572,10 @@ A: 当前只发布 Android。iOS 计划中，需要把 WebView 桥接从 Java �
 **Q: 怎么贡献？**
 
 A: Issue / PR 都欢迎。注意：
-- 不要提交 `tools/`、`build_log*.txt`、`preview-*.html`、`REVIEW_ANALYSIS.md`、`hub.yaml`、APK、图片等非源码文件
+- 不要提交 `tools/`、`icon_design/`、`build_log*.txt`、`build_apk_log*.txt`、`preview-*.html`、`REVIEW_ANALYSIS.md`、`hub.yaml`、APK、截图、个人文档等非源码文件
 - 新增模块请放在 `js/<module>/` 下，CSS 镜像到 `css/<module>.css`
 - 前端源码修改后需同步到 `android/app/src/main/assets/www/` 对应目录
+- 新增图片资源需在 `.gitignore` 中添加对应例外规则
 
 ---
 

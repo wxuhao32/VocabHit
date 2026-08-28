@@ -5,6 +5,24 @@
 
 /* ---------- 通用 ---------- */
 
+/* 二级页枢纽：生词 / 存储库 打通为一张卡（同首页「继续学习」打通布局） */
+.sr-hub-stack {
+  margin-top: 12px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.sr-hub-stack .review-entry {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.sr-hub-stack .review-entry + .review-entry { border-top: 1px solid var(--hairline); }
+.sr-hub-stack .review-entry:active { transform: none; background: var(--surface-2); }
+
 .sr-sec-title {
   margin: 24px 0 10px;
   font-size: 13px;
@@ -123,8 +141,8 @@ html[data-theme="dark"] .sr-vocab-time.due { color: #FF453A; }
 /* 本页用纯淡入替代全局 pageIn：pageIn 的 translateY(transform) 会把 fixed 子元素
    （操作浮条）的定位基准改为页面自身，动画结束瞬间又跳回视口定位 —— 即
    「先正常显示 → 闪到最底部被 Tab 栏遮挡」的闪动根源。纯 opacity 不产生定位基准变化。
-   列表底部预留：.sr-pick-list padding-bottom(90px) + 页 padding(24px) + .app 为 Tab 栏
-   预留(72px+--sab) = 186px+--sab > 浮条顶部(84px+--sab+高约61px)，末条不会被遮挡。 */
+   列表底部预留：.sr-pick-list padding-bottom(90px) + 页 padding(24px) + .app 为悬浮胶囊导航
+   预留(100px+--sab) = 214px+--sab > 浮条顶部(90px+--sab+高约48px)，末条不会被遮挡。 */
 #page-sr-lib { animation: srLibFade var(--t-med) var(--ease); }
 @keyframes srLibFade { from { opacity: 0; } to { opacity: 1; } }
 
@@ -210,13 +228,14 @@ html[data-theme="dark"] .sr-vocab-time.due { color: #FF453A; }
 }
 .sr-pick-meta { margin-top: 3px; font-size: 12px; color: var(--text-3); }
 
-/* 底部批量操作浮条：固定于底部 Tab 栏正上方（Tab 栏高约 60px+安全区，.app 已为其预留 72px+--sab） */
+/* 底部批量操作浮条：固定于悬浮胶囊导航正上方（胶囊悬浮于安全区上方 12px、高约 62px，
+   顶部约在 74px+--sab 处；.app 已为导航预留 100px+--sab） */
 .sr-pick-bar {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  width: calc(min(430px, 100vw) - 28px); /* 桌面端同 .tabbar 收进 430px 取景框 */
-  bottom: calc(84px + var(--sab, 0px)); /* Tab 栏上方留 24px：不重叠、不被遮挡 */
+  width: calc(min(430px, 100vw) - 28px); /* 同 .tabbar 悬浮胶囊的左右留白 */
+  bottom: calc(90px + var(--sab, 0px)); /* 胶囊上方留约 16px：不重叠、不被遮挡 */
   z-index: 71; /* 高于 tabbar(70)（tabbar 在 DOM 更靠后，同层级会反盖）；低于 sheet(90)/toast(100) */
   display: flex;
   align-items: center;

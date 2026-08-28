@@ -10,8 +10,8 @@ android {
         applicationId "com.wxh.vocabulary"
         minSdk 26
         targetSdk 34
-        versionCode 80
-        versionName "1.0.7"
+        versionCode 84
+        versionName "1.1.1"
     }
 
     buildTypes {

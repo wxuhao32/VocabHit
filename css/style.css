@@ -4,23 +4,35 @@
    ============================================================ */
 
 :root {
-  /* 颜色 */
-  --bg: #F7F7F8;
+  /* 颜色：冷调现代浅色系（浅灰白底 + 纯白卡片 + 紫色强调） */
+  --bg: #F7F8FA;
   --surface: #FFFFFF;
-  --surface-2: #FBFBFC;
-  --text: #1D1D1F;
-  --text-2: #86868B;
-  --text-3: #B0B0B5;
-  --accent: #5856D6;
-  --accent-soft: rgba(88, 86, 214, 0.09);
-  --hairline: #ECECEE;
-  --hairline-strong: #E3E3E6;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.03);
+  --surface-2: #F3F4F6;
+  --text: #111827;
+  --text-2: #6B7280;
+  --text-3: #9CA3AF;
+  --accent: #6B5CE7;
+  --accent-soft: rgba(107, 92, 231, 0.09);
+  --hairline: #ECEFF3;
+  --hairline-strong: #E4E7EC;
+  --shadow-card: 0 2px 10px rgba(17, 24, 39, 0.04);
   /* drop-shadow 严格跟随圆角形状：避免 WebView 合成时 box-shadow 出现矩形直角 */
-  --shadow-float: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.14));
-  --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.12);
-  --overlay: rgba(20, 20, 22, 0.32);
+  --shadow-float: drop-shadow(0 8px 28px rgba(17, 24, 39, 0.16));
+  --shadow-sheet: 0 -8px 40px rgba(17, 24, 39, 0.12);
+  --overlay: rgba(15, 18, 25, 0.35);
   --scrim-blur: saturate(1.4) blur(2px);
+
+  /* 悬浮胶囊底部导航（浅色模式：纯白浮岛 + 柔和紫色高亮） */
+  --tabbar-bg: #FFFFFF;
+  --tab-active-bg: rgba(107, 92, 231, 0.10);  /* 选中项淡紫胶囊底 */
+  --tab-active: #6B5CE7;                      /* 选中项紫色，低对比但可快速辨识 */
+  /* drop-shadow 严格跟随圆角形状：避免 WebView 合成时 box-shadow 出现矩形直角 */
+  --tabbar-shadow: drop-shadow(0 10px 22px rgba(17, 24, 39, 0.10))
+    drop-shadow(0 2px 6px rgba(17, 24, 39, 0.05));
+
+  /* 首页 TODAY 渐变英雄卡（浅紫 → 紫罗兰） */
+  --stats-hero: linear-gradient(115deg, #A78BFA 0%, #8B6CF4 48%, #7C5CF0 100%);
+  --stats-hero-shadow: 0 12px 28px rgba(124, 92, 240, 0.28);
 
   /* 字体 */
   --font: "Inter", -apple-system, "SF Pro Text", "PingFang SC",
@@ -47,53 +59,81 @@
 }
 
 html[data-theme="dark"] {
-  --bg: #131315;
-  --surface: #1C1C1E;
-  --surface-2: #212123;
-  --text: #F5F5F7;
-  --text-2: #98989D;
-  --text-3: #636366;
-  --accent: #7D7AFF;
-  --accent-soft: rgba(125, 122, 255, 0.14);
-  --hairline: rgba(255, 255, 255, 0.08);
+  --bg: #0B0E14;
+  --surface: #141922;
+  --surface-2: #1B212C;
+  --text: #F5F6F8;
+  --text-2: #9CA3AF;
+  --text-3: #6B7280;
+  --accent: #8B5CF6;
+  --accent-soft: rgba(139, 92, 246, 0.16);
+  --hairline: rgba(255, 255, 255, 0.07);
   --hairline-strong: rgba(255, 255, 255, 0.12);
   --shadow-card: none;
   --shadow-float: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.5));
   --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.45);
   --overlay: rgba(0, 0, 0, 0.5);
-  --rv-glass: rgba(28, 28, 30, 0.55);
-  --rv-glass-active: rgba(45, 45, 48, 0.85);
+  --rv-glass: rgba(20, 25, 34, 0.55);
+  --rv-glass-active: rgba(27, 33, 44, 0.85);
+  --tabbar-bg: #161B24;
+  --tab-active-bg: rgba(139, 92, 246, 0.18);
+  --tab-active: #A78BFA;
+  --tabbar-shadow: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.45))
+    drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
+  --stats-hero: linear-gradient(115deg, #8B78F6 0%, #7358EE 48%, #6647E4 100%);
+  --stats-hero-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
 }
 
 @media (prefers-color-scheme: dark) {
   html[data-theme="system"] {
-    --bg: #131315;
-    --surface: #1C1C1E;
-    --surface-2: #212123;
-    --text: #F5F5F7;
-    --text-2: #98989D;
-    --text-3: #636366;
-    --accent: #7D7AFF;
-    --accent-soft: rgba(125, 122, 255, 0.14);
-    --hairline: rgba(255, 255, 255, 0.08);
+    --bg: #0B0E14;
+    --surface: #141922;
+    --surface-2: #1B212C;
+    --text: #F5F6F8;
+    --text-2: #9CA3AF;
+    --text-3: #6B7280;
+    --accent: #8B5CF6;
+    --accent-soft: rgba(139, 92, 246, 0.16);
+    --hairline: rgba(255, 255, 255, 0.07);
     --hairline-strong: rgba(255, 255, 255, 0.12);
     --shadow-card: none;
     --shadow-float: drop-shadow(0 8px 28px rgba(0, 0, 0, 0.5));
     --shadow-sheet: 0 -8px 40px rgba(0, 0, 0, 0.45);
     --overlay: rgba(0, 0, 0, 0.5);
-    --rv-glass: rgba(28, 28, 30, 0.55);
-    --rv-glass-active: rgba(45, 45, 48, 0.85);
+    --rv-glass: rgba(20, 25, 34, 0.55);
+    --rv-glass-active: rgba(27, 33, 44, 0.85);
+    --tabbar-bg: #161B24;
+    --tab-active-bg: rgba(139, 92, 246, 0.18);
+    --tab-active: #A78BFA;
+    --tabbar-shadow: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.45))
+      drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
+    --stats-hero: linear-gradient(115deg, #8B78F6 0%, #7358EE 48%, #6647E4 100%);
+    --stats-hero-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
   }
 }
 
 /* ---------- Reset ---------- */
 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* UI 文本全局不可选中：长按标题/Tab/按钮/标签/说明文字等不再弹出系统选择复制菜单；
+   由 body 继承到所有展示元素。输入控件（input/textarea/contenteditable）在下方恢复可选，
+   不影响打字时的选择/复制/粘贴；已显式声明 user-select: text 的元素保持原有行为 */
+body {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input, textarea, [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html { height: 100%; }
 
 body {
   font-family: var(--font);
-  background: #EDEDF0;
+  background: #E9EBEF;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -115,7 +155,7 @@ ul { list-style: none; }
   margin: 0 auto;
   background: var(--bg);
   padding-top: var(--sat);
-  padding-bottom: calc(72px + var(--sab));
+  padding-bottom: calc(100px + var(--sab)); /* 悬浮胶囊导航约占 74px + 悬浮间距，预留不被遮挡 */
   overflow-x: hidden;
 }
 
@@ -139,6 +179,22 @@ ul { list-style: none; }
 
 .page-header { margin-bottom: 20px; position: relative; }
 
+/* 首页线条小狗贴纸（参考效果图构图）：骑在搜索框右上角，底部轻搭搜索框上沿；
+   纯视觉点缀，不拦截交互，不遮挡搜索图标与占位文字（它们在搜索框左侧） */
+.home-mascot {
+  position: absolute;
+  top: 30px;
+  right: 24px;
+  width: clamp(56px, 15vw, 66px);
+  height: auto; /* 跟随原图宽高比，不拉伸变形 */
+  pointer-events: none; /* 装饰元素，点击穿透到下方，搜索框交互不受影响 */
+  user-select: none;
+  -webkit-user-drag: none;
+  z-index: 2; /* 叠在搜索框之上，形成自然的接触层次 */
+  /* drop-shadow 跟随透明轮廓，营造轻微浮起感（避免矩形直角阴影） */
+  filter: drop-shadow(0 4px 10px rgba(17, 24, 39, 0.10));
+}
+
 /* 页头右侧低调操作（如 Review 清空队列） */
 .page-header-action {
   position: absolute;
@@ -159,6 +215,13 @@ ul { list-style: none; }
   font-weight: 700;
   letter-spacing: -0.03em;
   line-height: 1.15;
+}
+/* 首页标题「Hit」紫色渐变（复刻设计稿：Vocab 黑 + Hit 渐变） */
+.title-hit {
+  background: linear-gradient(100deg, #8B78F6, #6B5CE7);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .page-title { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
@@ -216,28 +279,55 @@ ul { list-style: none; }
   margin-bottom: 10px;
 }
 
-.stats-row {
+/* TODAY 渐变英雄卡：紫渐变底 + 白字三列统计 + 右上连续天数白描边胶囊 */
+.stats-hero {
+  padding: 18px 18px 20px;
+  border-radius: 22px;
+  background: var(--stats-hero);
+  box-shadow: var(--stats-hero-shadow);
+  color: #fff;
+}
+.stats-hero-top {
   display: flex;
   align-items: center;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-card);
-  padding: 18px 8px;
-  box-shadow: var(--shadow-card);
+  justify-content: space-between;
+  margin-bottom: 18px;
 }
-
-.stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
-
-.stat-num { font-size: 27px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-
-.stat-label { font-size: 12.5px; color: var(--text-2); }
-
-.stat-divider { width: 1px; height: 34px; background: var(--hairline); }
+.stats-hero-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.82);
+}
+.stats-hero-streak {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px) saturate(1.3);
+  -webkit-backdrop-filter: blur(10px) saturate(1.3);
+  font-size: 12px;
+  font-weight: 550;
+}
+.stats-hero-streak svg { width: 12px; height: 12px; }
+.stats-hero-streak b { font-weight: 700; }
+/* 显式 display 会覆盖 [hidden] 默认隐藏，需补回 */
+.stats-hero-streak[hidden] { display: none; }
+.stats-hero-row { display: flex; align-items: center; }
+/* 后代选择器限定：避免与坚持看板统计区的 .stat-label 二次定义冲突 */
+.stats-hero-row .stat { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.stats-hero-row .stat-num { font-size: 27px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: #fff; }
+.stats-hero-row .stat-label { font-size: 12.5px; color: rgba(255, 255, 255, 0.75); }
+.stats-hero-row .stat-divider { width: 1px; height: 34px; background: rgba(255, 255, 255, 0.28); flex: none; }
 
 /* ---------- 区块 ---------- */
 .section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
 
-.section-title { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
+/* 与设置页分组标题（通用/数据/学习/关于）同规格：12px 浅灰小标题 */
+.section-title { font-size: 12px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); }
 
 .view-all {
   display: inline-flex;
@@ -250,6 +340,10 @@ ul { list-style: none; }
   transition: opacity var(--t-fast) ease;
 }
 .view-all:active { opacity: 0.6; }
+/* 「查看全部」放入区块标题行右侧时不额外下移 */
+.section-head .view-all { margin-top: 0; }
+/* 首页今日生词列表与标题拉开一点间距，避免拥挤 */
+#page-home .section-head + .word-list { margin-top: 12px; }
 
 /* ---------- 单词列表 ---------- */
 .word-list {
@@ -397,6 +491,23 @@ ul { list-style: none; }
 }
 .empty-state span { font-size: 12.5px; color: var(--text-3); }
 
+/* 首页今日生词空状态：紫色文档图标 + 主文案 + 副文案（复刻设计稿） */
+.empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 34px 18px 32px;
+}
+.empty-hero-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 52px; height: 52px;
+  margin-bottom: 10px;
+  border-radius: 15px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.empty-hero-icon svg { width: 26px; height: 26px; }
+
 .history-more {
   text-align: center;
   padding: 14px 0 4px;
@@ -445,6 +556,15 @@ ul { list-style: none; }
 .settings-item:last-child { border-bottom: none; }
 .settings-item.clickable { transition: background var(--t-fast) ease; }
 .settings-item.clickable:active { background: var(--surface-2); }
+/* 强调分割线的前一行去掉自身 hairline，避免两条线叠在一起 */
+.settings-item.no-border { border-bottom: none; }
+
+/* 设置项之间的强调分割线（比行间距更有留白，用于区分两个不同功能入口） */
+.settings-sep {
+  height: 1px;
+  background: var(--hairline-strong);
+  margin: 5px 16px;
+}
 
 .settings-item-label {
   display: flex;
@@ -455,6 +575,22 @@ ul { list-style: none; }
 }
 
 .settings-item-value { font-size: 13.5px; color: var(--text-2); font-weight: 400; }
+
+/* 提醒时间输入（原生时间选择器，外观沿用设置页字段风格） */
+.settings-time {
+  font: inherit;
+  font-size: 14.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  height: 32px;
+  padding: 0 10px;
+  flex: none;
+  transition: border-color var(--t-fast) ease;
+}
+.settings-time:focus { outline: none; border-color: var(--accent); }
 
 .chevron { color: var(--text-3); }
 
@@ -549,12 +685,96 @@ ul { list-style: none; }
 }
 
 /* ---------- 导出页 ---------- */
-.export-hero { margin-bottom: 28px; }
-
-.export-meta { font-size: 14px; color: var(--text-2); font-variant-numeric: tabular-nums; }
-.export-meta.muted { color: var(--text-3); font-size: 13px; margin-top: 2px; }
-
 .export-field { margin-bottom: 22px; }
+
+/* 格式选择：列表式卡片（图标 + 名称描述 + 右侧选中圈） */
+.fmt-list { display: flex; flex-direction: column; gap: 10px; }
+.fmt-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  white-space: normal;
+  transition: border-color var(--t-fast) ease, transform var(--t-fast) var(--ease);
+}
+.fmt-row:active { transform: scale(0.985); }
+.fmt-row[aria-checked="true"] { border-color: var(--accent); }
+.fmt-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  flex: none;
+  color: #fff;
+}
+.fmt-icon svg { width: 20px; height: 20px; }
+.fmt-icon-pdf { background: linear-gradient(135deg, #9F7AEA, #7C5CF0); }
+.fmt-icon-word { background: linear-gradient(135deg, #34C77B, #16A34A); }
+.fmt-icon-png { background: linear-gradient(135deg, #FFB35C, #F59E0B); }
+.fmt-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.fmt-name { font-size: 15px; font-weight: 620; color: var(--text); }
+.fmt-desc { font-size: 12.5px; color: var(--text-3); }
+.fmt-check {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid var(--hairline-strong);
+  color: transparent;
+  flex: none;
+  transition: background var(--t-fast) ease, border-color var(--t-fast) ease;
+}
+.fmt-check svg { width: 12px; height: 12px; }
+.fmt-row[aria-checked="true"] .fmt-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* 预览区：横向布局（灰底文档图形 + 标题/副标题），对齐设计参考图 */
+.export-preview {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 15px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.export-preview-doc {
+  position: relative;
+  flex: none;
+  width: 38px;
+  height: 46px;
+  border-radius: 7px;
+  background: #C9CEDA;
+}
+.export-preview-doc i {
+  position: absolute;
+  left: 7px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.9);
+}
+.export-preview-doc i:nth-child(1) { top: 10px; right: 7px; }
+.export-preview-doc i:nth-child(2) { top: 19px; right: 16px; }
+.export-preview-doc i:nth-child(3) { top: 28px; right: 10px; }
+.export-preview-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.export-preview-title { font-size: 15px; font-weight: 620; color: var(--text); }
+.export-preview-sub { font-size: 12.5px; color: var(--text-3); }
+
+/* 导出主按钮：紫色渐变大圆角矩形（对齐参考图） */
+.export-submit {
+  width: 100%;
+  margin-top: 6px;
+  padding: 15px;
+  border-radius: 16px;
+  font-size: 16px;
+  background: linear-gradient(115deg, #9F7AEA, #7C5CF0);
+  box-shadow: 0 10px 24px rgba(124, 92, 240, 0.3);
+}
+.export-submit:disabled { opacity: 0.5; box-shadow: none; }
 
 .field-label {
   font-size: 12px;
@@ -756,20 +976,27 @@ ul { list-style: none; }
 /* 生词页数量说明下移：与视图切换器拉开间距，层级更舒展（仅生词页） */
 #page-words .page-subtitle { margin-top: -2px; }
 
-/* ---------- 底部导航 ---------- */
+/* ---------- 底部导航 · 悬浮胶囊浮岛 ----------
+   不贴合屏幕底部：悬浮于底部安全区上方，大圆角胶囊结构，
+   浅色纯白 / 深色深灰浮岛 + 柔和阴影表现悬浮感，无边框、无顶部分割线，
+   选中项淡紫胶囊高亮（冷色系），与页面主体保持轻微色差，形成独立视觉分层。 */
 .tabbar {
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  bottom: 0;
-  width: min(430px, 100vw);
+  /* 悬浮间距 12px 叠安全区 --sab（系统导航栏/手势条）与键盘 --ime（原生注入）：
+     窗口恒全屏（ADJUST_NOTHING）下，键盘弹出时浮岛稳定浮在其上方，
+     不钻入输入区域、不异常跳动；收起后回落原位 */
+  bottom: calc(12px + var(--sab) + var(--ime));
+  /* 430 取景框内左右各留 14px，两侧均衡；小屏同比例收窄 */
+  width: min(calc(430px - 28px), calc(100vw - 28px));
   display: flex;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: saturate(1.6) blur(16px);
-  -webkit-backdrop-filter: saturate(1.6) blur(16px);
-  border-top: 1px solid var(--hairline);
-  padding: 7px 8px calc(7px + var(--sab));
+  gap: 2px;
+  background: var(--tabbar-bg);
+  border-radius: 26px;
+  padding: 6px;
   z-index: 70;
+  filter: var(--tabbar-shadow); /* 轻柔和阴影；不用厚重阴影/发光 */
 }
 
 .tab {
@@ -778,24 +1005,31 @@ ul { list-style: none; }
   flex-direction: column;
   align-items: center;
   gap: 3px;
-  padding: 4px 0 2px;
-  color: var(--text-3);
+  padding: 5px 0 4px;
+  color: var(--text-3); /* 未选中：降低视觉权重 */
   font-size: 10.5px;
   font-weight: 520;
-  border-radius: 10px;
-  transition: color var(--t-fast) ease;
+  border-radius: 20px; /* 选中高亮的胶囊底形状 */
+  transition: color var(--t-fast) ease, background-color var(--t-fast) ease,
+    transform 0.12s ease, opacity 0.12s ease;
 }
 
 .tab .icon { width: 23px; height: 23px; }
 
-.tab.active { color: var(--accent); }
-.tab:active { opacity: 0.65; }
+/* 选中：淡紫胶囊底 + 紫色图标，低对比但可快速辨识当前页 */
+.tab.active {
+  background: var(--tab-active-bg);
+  color: var(--tab-active);
+  font-weight: 600;
+}
+/* 点击反馈：短促轻微的缩放 + 透明度，不夸张 */
+.tab:active { transform: scale(0.93); opacity: 0.75; }
 
 /* ---------- Toast ---------- */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(96px + var(--sab) + var(--ime));
+  bottom: calc(116px + var(--sab) + var(--ime)); /* 悬浮胶囊导航上方 */
   transform: translateX(-50%) translateY(8px);
   background: var(--text);
   color: var(--bg);
@@ -832,7 +1066,7 @@ ul { list-style: none; }
   align-items: center;
   gap: 12px;
   width: 100%;
-  margin: 4px 0 22px;
+  margin: 0;
   padding: 13px 14px;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -853,9 +1087,51 @@ ul { list-style: none; }
 .review-entry-icon svg { width: 21px; height: 21px; }
 .review-entry-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .review-entry-title { font-size: 15px; font-weight: 620; color: var(--text); }
-.review-entry-sub { font-size: 13px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.review-entry-sub { font-size: 13px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .review-entry-sub.muted { color: var(--text-3); }
 .review-entry-arrow { color: var(--text-3); }
+
+/* 「继续学习」入口纵列：打通式整体卡片，行间细分割线（复刻设计稿） */
+.entry-stack {
+  margin: 12px 0 26px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.entry-stack .review-entry {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.entry-stack .review-entry + .review-entry { border-top: 1px solid var(--hairline); }
+.entry-stack .review-entry:active { transform: none; background: var(--surface-2); }
+
+/* 「工具」2x2 网格：图标在上、标题描述在下、无箭头（复刻设计稿） */
+.tool-grid { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 1fr; gap: 10px; margin: 12px 0 26px; }
+.tool-grid .review-entry {
+  flex-direction: column;
+  align-items: stretch; /* 横向拉伸子项：保证标题/描述省略号生效且四卡内容布局一致 */
+  gap: 12px;
+  padding: 16px;
+  height: 100%; /* 同行内由 grid 默认 stretch 拉齐；跨行等高由 JS equalizeToolGrid 统一 */
+  min-width: 0; /* 关键：1fr 列默认取内容 min-content（nowrap 全文宽），会导致两列不等宽；置 0 后两列严格平分 */
+}
+/* 标题/描述单行省略，避免长文案换行导致卡片高度不一 */
+.tool-grid .review-entry-title,
+.tool-grid .review-entry-sub {
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tool-grid .review-entry-icon { width: 42px; height: 42px; border-radius: 13px; }
+.tool-grid .review-entry-icon svg { width: 22px; height: 22px; }
+.tool-grid .review-entry-arrow { display: none; }
+/* 静态查询记录卡 DOM 排在最前，用 order 沉底到网格最后一格 */
+#history-entry { order: 9; }
 
 /* ================================================================
    Review 沉浸模式：进入复习后全屏化（独立学习空间）
@@ -864,6 +1140,8 @@ ul { list-style: none; }
 
 /* 隐藏底部导航、悬浮查词；Review 页铺满全屏（限 430 取景框，桌面预览居中） */
 body.review-active .tabbar { display: none; }
+/* 任务/导出子页（带返回键）隐藏底部导航，对齐设计参考图 */
+body.subpage-active .tabbar { display: none; }
 body.review-active #page-review {
   position: fixed;
   inset: 0;
@@ -1625,6 +1903,25 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
   overflow-wrap: anywhere;
   white-space: normal;
 }
+/* 看词选义：中文选项内部两条释义分行，词性 + 释义层次清晰 */
+.rv-mcq-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.55;
+}
+.rv-mcq-line + .rv-mcq-line { margin-top: 3px; }
+
+/* 词性：真实词典数据，弱化前置标签，不抢释义视觉重点 */
+.rv-mcq-pos {
+  flex: none;
+  font-size: 0.82em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-3);
+}
+.rv-mcq-text { flex: 1 1 auto; min-width: 0; }
+
 .rv-mcq-option:nth-child(1) { animation-delay: 0ms; }
 .rv-mcq-option:nth-child(2) { animation-delay: 50ms; }
 .rv-mcq-option:nth-child(3) { animation-delay: 100ms; }
@@ -1772,7 +2069,7 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
   .rv-topbar-fill { transition: none; }
 }
 /* ---------- 番茄钟 ---------- */
-.pomo-entry-icon { background: rgba(255, 149, 0, 0.13); color: #FF9500; }
+.pomo-entry-icon { background: rgba(161, 107, 60, 0.14); color: #9A6434; }
 
 .pomo-body { padding-bottom: 24px; }
 .pomo-presets { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -1896,20 +2193,60 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
 /* ---------- 待办任务 / 目标 / 奖励 / 坚持看板 ---------- */
 
 /* 首页：任务入口与坚持看板入口（复用 review-entry，图标差异化配色） */
-.tasks-entry-icon { background: rgba(52, 199, 89, 0.12); color: #2EB45B; }
-.habits-entry-icon { background: rgba(0, 122, 255, 0.10); color: #0A84FF; }
+.tasks-entry-icon { background: rgba(16, 185, 129, 0.12); color: #0E9F6E; }
+.habits-entry-icon { background: rgba(107, 92, 231, 0.10); color: #6B5CE7; }
+.history-entry-icon { background: rgba(16, 185, 129, 0.12); color: #10B981; }
+#kn-entry .review-entry-icon { background: rgba(107, 92, 231, 0.10); color: #6B5CE7; }
+#repo-entry .review-entry-icon { background: rgba(79, 70, 229, 0.10); color: #4F46E5; }
+#ml-entry .review-entry-icon { background: rgba(245, 158, 11, 0.13); color: #EA8C00; }
+
+/* 首页入口解释性副标题配色：番茄钟橙 / 任务绿（复刻设计稿） */
+#pomo-count { color: #F0821E; }
+#pomo-count.muted { color: var(--text-3); }
+#tasks-count:not(.muted) { color: #10B981; }
+
+/* 任务面板顶部进度环卡片 */
+.task-progress-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 15px 16px;
+  margin-bottom: 20px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+}
+.task-ring { width: 50px; height: 50px; flex: none; }
+.task-ring-track { fill: none; stroke: var(--hairline); stroke-width: 5; }
+.task-ring-bar {
+  fill: none;
+  stroke: #10B981;
+  stroke-width: 6.5;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  /* 回弹缓动：勾选任务时圆弧带轻微过冲地转到新进度（物理感） */
+  transition: stroke-dashoffset 0.55s cubic-bezier(0.3, 1.25, 0.5, 1);
+}
+.task-ring-core { fill: #fff; } /* 内圈白色，避免与外圈绿色进度形成同心圆观感 */
+.task-ring-text { font-size: 10.5px; font-weight: 750; fill: #10B981; font-variant-numeric: tabular-nums; }
+.task-progress-title { font-size: 15px; font-weight: 620; color: var(--text); }
+.task-progress-sub { margin-top: 3px; font-size: 13px; font-weight: 550; color: #10B981; font-variant-numeric: tabular-nums; }
+
+/* 昨日任务反馈：绿色提示条（复刻设计稿） */
 .tasks-feedback {
   display: flex; align-items: center; gap: 8px;
   margin: 4px 0 14px;
-  padding: 10px 14px;
+  padding: 11px 14px;
   border-radius: 12px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
+  background: #D9F3E8; /* 实心浅绿底（对齐参考图：绿底 + 绿字） */
   font-size: 13.5px;
-  color: var(--text-2);
+  font-weight: 600;
+  color: #0B9E6C;
 }
-.feedback-dot { width: 7px; height: 7px; border-radius: 50%; background: #FF9F0A; flex: none; }
-.feedback-dot.ok { background: #34C759; }
+.feedback-dot { width: 7px; height: 7px; border-radius: 50%; background: #F59E0B; flex: none; }
+.feedback-dot.ok { background: #10B981; }
 
 /* 任务页主体 */
 .tasks-body, .habits-body { padding-bottom: 30px; }
@@ -1986,9 +2323,18 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
   border: 1px solid var(--hairline);
   border-radius: var(--r-card);
 }
-.goal-dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); opacity: 0.75; }
+/* 目标行：靶子图标（紫色软底）；奖励行：宝箱图标（琥珀软底） */
+.goal-icon,
+.reward-icon {
+  flex: none;
+  width: 36px; height: 36px;
+  border-radius: 11px;
+  display: flex; align-items: center; justify-content: center;
+}
+.goal-icon { background: rgba(107, 92, 231, 0.10); color: #6B5CE7; }
+.reward-icon { background: rgba(245, 158, 11, 0.13); color: #C2740A; }
+.goal-icon svg, .reward-icon svg { width: 19px; height: 19px; }
 .goal-name { font-size: 15px; font-weight: 580; color: var(--text); }
-.reward-icon { flex: none; font-size: 16px; }
 .reward-content { font-size: 14.5px; font-weight: 550; color: var(--text); }
 
 /* 创建表单 */
@@ -2314,4 +2660,41 @@ html[data-theme="dark"] .chart-dot.dot-daily { stroke: #FF9F0A; }
 @media (prefers-reduced-motion: reduce) {
   .stat-num.bump,
   .task-check.just-checked { animation: none; }
+}
+
+/* ---------- 深色模式组件级覆写（冷色调） ---------- */
+html[data-theme="dark"] .title-hit { background: linear-gradient(100deg, #A78BFA, #8B5CF6); -webkit-background-clip: text; background-clip: text; }
+html[data-theme="dark"] .tasks-feedback { background: rgba(16, 185, 129, 0.14); color: #34D399; }
+html[data-theme="dark"] .habits-entry-icon,
+html[data-theme="dark"] #kn-entry .review-entry-icon { background: rgba(139, 92, 246, 0.16); color: #A78BFA; }
+html[data-theme="dark"] #repo-entry .review-entry-icon { background: rgba(129, 140, 248, 0.16); color: #A5B4FC; }
+html[data-theme="dark"] .pomo-entry-icon { background: rgba(217, 164, 106, 0.15); color: #D9A46A; }
+html[data-theme="dark"] .tasks-entry-icon,
+html[data-theme="dark"] .history-entry-icon { background: rgba(52, 211, 153, 0.14); color: #34D399; }
+html[data-theme="dark"] #ml-entry .review-entry-icon { background: rgba(251, 191, 36, 0.14); color: #FBBF24; }
+html[data-theme="dark"] #pomo-count { color: #FFB067; }
+html[data-theme="dark"] #tasks-count:not(.muted) { color: #34D399; }
+/* 进度环内圈：浅色白底，深色用面板色，数字绿色随主题提亮 */
+html[data-theme="dark"] .task-ring-core { fill: #1C232E; }
+html[data-theme="dark"] .task-ring-text { fill: #34D399; }
+/* 目标/奖励图标深色配色 */
+html[data-theme="dark"] .goal-icon { background: rgba(139, 92, 246, 0.16); color: #A78BFA; }
+html[data-theme="dark"] .reward-icon { background: rgba(245, 158, 11, 0.15); color: #FBBF24; }
+
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .title-hit { background: linear-gradient(100deg, #A78BFA, #8B5CF6); -webkit-background-clip: text; background-clip: text; }
+  html[data-theme="system"] .tasks-feedback { background: rgba(16, 185, 129, 0.14); color: #34D399; }
+  html[data-theme="system"] .habits-entry-icon,
+  html[data-theme="system"] #kn-entry .review-entry-icon { background: rgba(139, 92, 246, 0.16); color: #A78BFA; }
+  html[data-theme="system"] #repo-entry .review-entry-icon { background: rgba(129, 140, 248, 0.16); color: #A5B4FC; }
+  html[data-theme="system"] .pomo-entry-icon { background: rgba(217, 164, 106, 0.15); color: #D9A46A; }
+  html[data-theme="system"] .tasks-entry-icon,
+  html[data-theme="system"] .history-entry-icon { background: rgba(52, 211, 153, 0.14); color: #34D399; }
+  html[data-theme="system"] #ml-entry .review-entry-icon { background: rgba(251, 191, 36, 0.14); color: #FBBF24; }
+  html[data-theme="system"] #pomo-count { color: #FFB067; }
+  html[data-theme="system"] #tasks-count:not(.muted) { color: #34D399; }
+  html[data-theme="system"] .task-ring-core { fill: #1C232E; }
+  html[data-theme="system"] .task-ring-text { fill: #34D399; }
+  html[data-theme="system"] .goal-icon { background: rgba(139, 92, 246, 0.16); color: #A78BFA; }
+  html[data-theme="system"] .reward-icon { background: rgba(245, 158, 11, 0.15); color: #FBBF24; }
 }

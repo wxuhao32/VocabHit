@@ -12,6 +12,7 @@ captures/
 # ===== 日志 / 临时 =====
 *.log
 build_log*.txt
+build_apk_log*.txt
 
 # ===== 二进制 / 私有文档（不进入版本库） =====
 *.apk
@@ -27,6 +28,7 @@ Knowledge_Learning_Repository_*.md
 tools/
 .test/
 verify/
+icon_design/
 
 # ===== Python / Node 脚本 =====
 *.py
@@ -40,10 +42,15 @@ verify/
 # 保留导出模板背景图（线条小狗）
 !android/app/src/main/assets/www/线条小狗.png
 !android/app/src/main/assets/www/线条小狗2.png
+!android/app/src/main/assets/www/线条小狗3.png
 !线条小狗.png
 !线条小狗2.png
+!线条小狗3.png
 # 保留应用图标
 !VH icon.png
+# 保留应用内图片资源（吉祥物等）
+!android/app/src/main/assets/www/img/*.png
+!img/*.png
 
 # ===== AI 工具 / 编辑器脚手架 =====
 .codebuddy/

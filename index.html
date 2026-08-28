@@ -3,14 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <meta name="theme-color" content="#F7F7F8" />
+  <meta name="theme-color" content="#F7F8FA" />
   <title>VocabHit — 考研词汇查询</title>
-  <link rel="stylesheet" href="css/style.css?v=12" />
+  <script>
+    /* 首帧前应用主题 + 给文档首帧铺底色：即使 WebView 初始帧/外部样式表加载偏慢，
+       文档首帧颜色也与启动窗口底色（#F7F8FA）一致，消除启动动画前的白闪帧 */
+    try {
+      var t = localStorage.getItem("vc-theme") || "system";
+      document.documentElement.dataset.theme = t;
+      var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.style.background = dark ? "#0B0E14" : "#F7F8FA";
+    } catch (e) { document.documentElement.dataset.theme = "system"; }
+  </script>
+  <style>
+    /* 首帧底色兜底（与启动窗口/闪屏同色）；外部样式表加载后由各自规则接管 */
+    html, body, #splash { background: #F7F8FA; }
+  </style>
+  <link rel="stylesheet" href="css/style.css?v=24" />
   <link rel="stylesheet" href="css/knowledge.css?v=11" />
   <link rel="stylesheet" href="css/math-lab.css?v=4" />
-  <link rel="stylesheet" href="css/spaced-repetition.css?v=6" />
+  <link rel="stylesheet" href="css/spaced-repetition.css?v=7" />
+  <link rel="stylesheet" href="css/ky-level.css?v=1" />
+  <link rel="stylesheet" href="css/splash.css?v=1" />
 </head>
 <body>
+
+  <!-- ============ 启动闪屏：8 个字母从不同方向掉落拼成 VocabHit ============
+       与首页同文档渲染（淡出即首页，无白屏切换）；关闭时机由 js/splash.js
+       与 app.js 初始化完成信号共同决定，动画不阻塞任何初始化 -->
+  <div id="splash" aria-hidden="true">
+    <span class="splash-word"><span class="splash-letter">V</span><span class="splash-letter">o</span><span class="splash-letter">c</span><span class="splash-letter">a</span><span class="splash-letter">b</span><span class="splash-letter hit">H</span><span class="splash-letter hit">i</span><span class="splash-letter hit">t</span></span>
+  </div>
 
   <!-- 移动端应用容器 -->
   <div class="app" id="app">
@@ -18,8 +41,10 @@
     <!-- ============ 首页 Home ============ -->
     <main class="page active" id="page-home">
       <header class="page-header">
-        <h1 class="large-title">VocabHit</h1>
+        <h1 class="large-title">Vocab<span class="title-hit">Hit</span></h1>
         <p class="greeting" id="greeting">你好</p>
+        <!-- 线条小狗贴纸：骑在搜索框右上角的装饰元素，不响应任何交互 -->
+        <img class="home-mascot" src="img/dog.png" alt="" aria-hidden="true" draggable="false" />
       </header>
 
       <!-- 搜索框 -->
@@ -30,21 +55,47 @@
         <span class="search-bar-placeholder">搜索单词...</span>
       </button>
 
-      <!-- 今日数据 -->
+      <!-- 今日数据：紫色渐变卡（TODAY · 三列统计 · 连续天数胶囊） -->
       <section class="stats" aria-label="今日数据">
-        <p class="section-eyebrow">今日</p>
-        <div class="stats-row">
-          <div class="stat">
-            <span class="stat-num" id="stat-new">0</span>
-            <span class="stat-label">新增生词</span>
+        <div class="stats-hero">
+          <div class="stats-hero-top">
+            <p class="stats-hero-eyebrow">TODAY · 今日</p>
+            <span class="stats-hero-streak" id="stat-streak">
+              <svg class="icon-s" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1.5S3.7 6.4 3.7 9.6a4.3 4.3 0 0 0 8.6 0C12.3 6.4 8 1.5 8 1.5z"/>
+                <circle cx="9.8" cy="9.9" r="1.1" fill="#FFFFFF" opacity="0.55"/>
+              </svg>
+              连续 <b id="stat-streak-days">0</b> 天
+            </span>
           </div>
-          <div class="stat-divider"></div>
-          <div class="stat">
-            <span class="stat-num" id="stat-queries">0</span>
-            <span class="stat-label">查询次数</span>
+          <div class="stats-hero-row">
+            <div class="stat">
+              <span class="stat-num" id="stat-new">0</span>
+              <span class="stat-label">新增生词</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat">
+              <span class="stat-num" id="stat-queries">0</span>
+              <span class="stat-label">查询次数</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat">
+              <span class="stat-num" id="stat-focus">0</span>
+              <span class="stat-label">专注分钟</span>
+            </div>
           </div>
         </div>
       </section>
+
+      <!-- 昨日任务反馈（有昨日任务记录时显示） -->
+      <div class="tasks-feedback" id="tasks-feedback" style="display:none"></div>
+
+      <!-- 继续学习：四个入口卡片纵列（Knowledge/存储库/Math Lab 等工具入口注入到下方 #tool-grid） -->
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">继续学习</h2>
+        </div>
+        <div class="entry-stack">
 
       <!-- Review 复习入口 -->
       <button class="review-entry" id="review-entry" type="button">
@@ -80,9 +131,6 @@
         </svg>
       </button>
 
-      <!-- 昨日任务反馈（有昨日任务记录时显示） -->
-      <div class="tasks-feedback" id="tasks-feedback" style="display:none"></div>
-
       <!-- 待办任务入口 -->
       <button class="review-entry tasks-entry" id="tasks-entry" type="button">
         <span class="review-entry-icon tasks-entry-icon">
@@ -117,19 +165,45 @@
         </svg>
       </button>
 
+        </div>
+      </section>
+
+      <!-- 工具：2x2 网格（Knowledge / 存储库 / Math Lab 由模块注入，查询记录为静态卡） -->
+      <section class="section">
+        <div class="section-head">
+          <h2 class="section-title">工具</h2>
+        </div>
+        <div class="tool-grid" id="tool-grid">
+          <button class="review-entry" id="history-entry" type="button">
+            <span class="review-entry-icon history-entry-icon">
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="10" cy="10" r="7"/><path d="M10 6.5V10l2.5 1.5"/>
+              </svg>
+            </span>
+            <span class="review-entry-main">
+              <span class="review-entry-title">查询记录</span>
+              <span class="review-entry-sub" id="history-entry-sub">共 0 条 · 永久</span>
+            </span>
+            <svg class="icon icon-s review-entry-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
+        </div>
+      </section>
+
       <!-- 今日生词 -->
       <section class="section">
         <div class="section-head">
           <h2 class="section-title">今日生词</h2>
+          <button class="view-all" id="view-all" type="button">查看全部
+            <svg class="icon icon-s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
         </div>
         <ul class="word-list" id="home-word-list">
           <!-- JS 渲染 -->
         </ul>
-        <button class="view-all" id="view-all" type="button">查看全部
-          <svg class="icon icon-s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M6 3l5 5-5 5"/>
-          </svg>
-        </button>
       </section>
     </main>
 
@@ -192,7 +266,7 @@
               <path d="M6 3l5 5-5 5"/>
             </svg>
           </div>
-          <div class="settings-item" id="overlay-item" hidden>
+          <div class="settings-item no-border" id="overlay-item" hidden>
             <div class="settings-item-label">
               <span>后台悬浮查词</span>
               <span class="settings-item-value" id="overlay-value">关</span>
@@ -201,6 +275,17 @@
               <span class="switch-knob"></span>
             </button>
           </div>
+          <!-- 分割线：区分「后台悬浮查词」与「通知」两个入口 -->
+          <div class="settings-sep" id="notify-sep" role="separator" aria-hidden="true" hidden></div>
+          <button class="settings-item clickable" id="notify-entry" type="button" hidden>
+            <div class="settings-item-label">
+              <span>通知</span>
+              <span class="settings-item-value" id="notify-value">关</span>
+            </div>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
         </div>
       </section>
 
@@ -225,7 +310,7 @@
           <div class="settings-item">
             <div class="settings-item-label">
               <span>版本</span>
-              <span class="settings-item-value">1.0.7</span>
+              <span class="settings-item-value">1.1.1</span>
             </div>
           </div>
         </div>
@@ -242,31 +327,50 @@
             <path d="M10 3L5 8l5 5"/>
           </svg>
         </button>
+        <h1 class="page-title">导出</h1>
       </header>
 
-      <section class="export-hero">
-        <p class="export-meta" id="export-meta-date">—</p>
-        <p class="export-meta muted" id="export-meta-count">0 个生词 · 0 次查询</p>
-      </section>
-
       <section class="export-field">
-        <p class="field-label">导出内容</p>
-        <div class="segmented wide" id="content-seg" role="radiogroup" aria-label="导出内容">
+        <p class="field-label">范围</p>
+        <div class="segmented wide" id="content-seg" role="radiogroup" aria-label="导出范围">
           <button class="seg-btn" data-value="today" role="radio" aria-checked="true">今日生词</button>
           <button class="seg-btn" data-value="starred" role="radio" aria-checked="false">历史生词</button>
+          <button class="seg-btn" data-value="stats" role="radio" aria-checked="false">学习统计</button>
         </div>
       </section>
 
       <section class="export-field">
         <p class="field-label">格式</p>
-        <div class="segmented wide" id="format-seg" role="radiogroup" aria-label="导出格式">
-          <button class="seg-btn" data-value="pdf" role="radio" aria-checked="true">PDF</button>
-          <button class="seg-btn" data-value="word" role="radio" aria-checked="false">Word</button>
-          <button class="seg-btn" data-value="png" role="radio" aria-checked="false">PNG</button>
+        <div class="fmt-list" id="format-seg" role="radiogroup" aria-label="导出格式">
+          <button class="fmt-row seg-btn" data-value="pdf" role="radio" aria-checked="true">
+            <span class="fmt-icon fmt-icon-pdf"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8.5 13h7M8.5 16.5h4.5"/></svg></span>
+            <span class="fmt-main">
+              <span class="fmt-name">PDF</span>
+              <span class="fmt-desc">适合打印 · 含音标与释义</span>
+            </span>
+            <span class="fmt-check" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+          </button>
+          <button class="fmt-row seg-btn" data-value="word" role="radio" aria-checked="false">
+            <span class="fmt-icon fmt-icon-word"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M8 12.8l1.4 5 2.6-4.6 2.6 4.6 1.4-5"/></svg></span>
+            <span class="fmt-main">
+              <span class="fmt-name">Word</span>
+              <span class="fmt-desc">可二次编辑</span>
+            </span>
+            <span class="fmt-check" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+          </button>
+          <button class="fmt-row seg-btn" data-value="png" role="radio" aria-checked="false">
+            <span class="fmt-icon fmt-icon-png"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="9.8" r="1.6"/><path d="M4.5 17.5l4.8-4.8 3 3 2.6-2.6 4.6 4.6"/></svg></span>
+            <span class="fmt-main">
+              <span class="fmt-name">PNG</span>
+              <span class="fmt-desc">卡片样式 · 适合分享</span>
+            </span>
+            <span class="fmt-check" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg></span>
+          </button>
         </div>
       </section>
 
-      <section class="export-field">
+      <!-- 导出样式：参考图无此区块，保留控件（功能不丢）但隐藏，默认清爽 -->
+      <section class="export-field" hidden>
         <p class="field-label">导出样式</p>
         <div class="segmented wide" id="style-seg" role="radiogroup" aria-label="导出样式">
           <button class="seg-btn" data-value="clean" role="radio" aria-checked="true">清爽</button>
@@ -275,7 +379,58 @@
         </div>
       </section>
 
-      <button class="primary-btn" id="export-btn" type="button">导出</button>
+      <section class="export-field">
+        <p class="field-label">预览</p>
+        <div class="export-preview">
+          <span class="export-preview-doc" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="export-preview-main">
+            <p class="export-preview-title" id="export-preview-title">PDF · 今日生词</p>
+            <p class="export-preview-sub" id="export-preview-sub">VocabHit 水印 · A4 竖版</p>
+          </span>
+        </div>
+      </section>
+
+      <button class="primary-btn export-submit" id="export-btn" type="button">导出文件</button>
+    </main>
+
+    <!-- ============ 通知设置页 Notify（设置 → 通知） ============ -->
+    <main class="page page-stack" id="page-notify">
+      <header class="page-header">
+        <button class="back-btn" data-back="settings" type="button" aria-label="返回">
+          <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 3L5 8l5 5"/>
+          </svg>
+        </button>
+        <h1 class="page-title">通知</h1>
+      </header>
+
+      <section class="settings-group">
+        <h2 class="settings-group-title">提醒</h2>
+        <div class="settings-list">
+          <div class="settings-item">
+            <div class="settings-item-label">
+              <span>启用提醒</span>
+            </div>
+            <button class="switch" id="notify-switch" type="button" role="switch" aria-checked="false" aria-label="启用通知提醒">
+              <span class="switch-knob"></span>
+            </button>
+          </div>
+          <div class="settings-item" id="notify-time-row">
+            <div class="settings-item-label">
+              <span>提醒时间</span>
+            </div>
+            <input class="settings-time" id="notify-time" type="time" value="21:00" aria-label="提醒时间" />
+          </div>
+          <div class="settings-item">
+            <div class="settings-item-label">
+              <span>状态</span>
+              <span class="settings-item-value" id="notify-status">未开启</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <p class="settings-footer">到点检查今日单词复习与学习任务，未完成时分别提醒</p>
     </main>
 
     <!-- ============ Review 复习页 ============ -->
@@ -389,20 +544,23 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </div>
 
+  <script src="js/splash.js?v=1"></script>
   <script src="js/dict.js"></script>
+  <script src="js/ky-manual.js"></script>
+  <script src="js/ky-level.js"></script>
   <script src="js/ecdict.js"></script>
   <script src="js/stats.js?v=1"></script>
   <script src="js/export-template.js?v=1"></script>
-  <script src="js/app.js?v=21"></script>
-  <script src="js/knowledge.js?v=16"></script>
+  <script src="js/app.js?v=29"></script>
+  <script src="js/knowledge.js?v=17"></script>
   <script src="js/math-lab/mathEngine.js?v=2"></script>
   <script src="js/math-lab/mathLabData.js?v=2"></script>
   <script src="js/math-lab/mathLabConfig.js?v=2"></script>
   <script src="js/math-lab/mathRenderer.js?v=2"></script>
   <script src="js/math-lab/mathCanvas.js?v=4"></script>
   <script src="js/math-lab/mathPresets.js?v=3"></script>
-  <script src="js/math-lab/mathLab.js?v=4"></script>
+  <script src="js/math-lab/mathLab.js?v=6"></script>
   <script src="js/spaced-repetition/srData.js?v=5"></script>
-  <script src="js/spaced-repetition/srUI.js?v=6"></script>
+  <script src="js/spaced-repetition/srUI.js?v=7"></script>
 </body>
 </html>

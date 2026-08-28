@@ -208,6 +208,22 @@ body.kn-selecting .rd-tip { visibility: hidden; }
   word-break: break-word;
 }
 
+/* ---------- 用户内容可选中（选择策略：系统 UI 默认不可选 + 用户内容区域明确允许） ----------
+   body 全局 user-select:none 只覆盖系统 UI（标题/Tab/按钮/标签/说明文字等），
+   用户内容区域在此显式恢复 text，支持长按/拖选/复制、划重点、荧光高亮、
+   选择文字添加知识库：
+   - 阅读正文 .rd-text（含 .kn-p/.kn-h1-3/.kn-ul/.kn-ol/.kn-li/.kn-table 等子结构）
+   - 存储库知识条目原文 .rp-full / 中文解释 .rp-explain / 上下文 .rp-quote
+   （来源卡片、分类标签等系统 UI 仍保持不可选） */
+.rd-text,
+.rp-full,
+.rp-explain,
+.rp-quote {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
 /* 段落：忠实原文顺序与空行；pre-wrap 保留段内空格 */
 .kn-p { white-space: pre-wrap; min-height: 1em; }
 .kn-p-empty { min-height: 0.9em; }

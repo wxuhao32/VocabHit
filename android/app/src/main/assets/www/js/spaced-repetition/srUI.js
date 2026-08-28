@@ -174,6 +174,7 @@
           <h1 class="page-title">自适应间隔算法</h1>
         </header>
         <p class="page-subtitle">管理生词与存储库的复习计划</p>
+        <div class="sr-hub-stack">
         <button class="review-entry" id="sr-vocab-entry" type="button">
           <span class="review-entry-icon">${DOC_SVG}</span>
           <span class="review-entry-main">
@@ -190,6 +191,7 @@
           </span>
           ${CHEV_SVG}
         </button>
+        </div>
       </main>
 
       <!-- 三级页：生词复习计划（只读现有 Review 队列） -->

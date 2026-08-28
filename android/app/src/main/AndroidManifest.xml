@@ -13,6 +13,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- 通知提醒：开机后恢复每日提醒计划；精确闹钟（Android 12+ 默认授予） -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+
     <application
         android:label="VocabHit"
         android:icon="@mipmap/ic_launcher"
@@ -50,5 +54,20 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vocabulary floating search overlay" />
         </service>
+
+        <!-- 通知提醒：到点检查由应用内 PendingIntent 显式触发；
+             其余动作（开机 / 应用更新 / 时间与日期变更）由系统广播恢复每日计划。
+             不导出：仅本应用与系统可发送，避免被第三方应用触发。 -->
+        <receiver
+            android:name=".ReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

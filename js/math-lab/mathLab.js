@@ -24,7 +24,8 @@
   /* ================= 图标 ================= */
 
   var BACK_SVG = '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>';
-  var MATH_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 4.5l4 5-4 5"/><path d="M11 14.5h4.5"/><path d="M13.2 8.3h4"/><circle cx="13.2" cy="8.3" r="2.6"/><path d="M11 4.5h4.5"/></svg>';
+  // 首页工具格图标：Σ（复刻设计稿的橙色西格玛）
+  var MATH_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6V4.5h-9L11 10l-5.5 5.5h9V14"/></svg>';
 
   /* ================= DOM 注入（既有 HTML 零修改） ================= */
 
@@ -38,8 +39,8 @@
         <button class="review-entry" id="ml-entry" type="button">
           <span class="review-entry-icon">${MATH_SVG}</span>
           <span class="review-entry-main">
-            <span class="review-entry-title">📐 Math Lab · 数学实验室</span>
-            <span class="review-entry-sub" id="ml-entry-sub">函数 · 导数 · 积分 · 极限 · 代数｜进入实验室</span>
+            <span class="review-entry-title">Math Lab</span>
+            <span class="review-entry-sub" id="ml-entry-sub">数学实验室</span>
           </span>
           <svg class="icon icon-s review-entry-arrow" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
         </button>`);

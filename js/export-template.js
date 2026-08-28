@@ -1,8 +1,10 @@
 /* ============================================================
-   生词导出 · 线条小狗模板渲染器
-   以根目录「线条小狗2.png」为每页固定整页背景（不做任何修改），
-   新模板中部为整片空白，词条写入单一整页大板块：
-   Canvas 测量排版（自动换行/自动测高/整条不拆分/贪婪紧凑装填）→ 逐页绘制
+   生词导出 · 线条小狗模板渲染器（模板三代）
+   以根目录「线条小狗3.png」为每页固定整页背景（不做任何修改），
+   新模板装饰集中在顶部（标题+两角角色）与底部两角，中部整片空白，
+   词条写入单一整页大板块：
+   Canvas 测量排版（自动换行/自动测高/整条不拆分/贪婪紧凑装填）
+   → 页内纵向均布（词条少时拉开间距并整体居中，不挤在顶部）→ 逐页绘制
    → 零依赖 PDF 装配（JPEG 页面嵌入）。
    挂载 window.VH_ExportTemplate；模板图缺失时返回 null，
    由 app.js 回退现有 HTML 导出路径。
@@ -13,17 +15,18 @@
 (function () {
   /* ---------- 布局常量（集中于此，便于按模板微调） ---------- */
 
-  /* 模板原始尺寸（线条小狗2.png 实测 943×1667），每页完整铺满 */
-  const PAGE = { w: 943, h: 1667 };
-  const TEMPLATE_SRC = "线条小狗2.png";
+  /* 模板原始尺寸（线条小狗3.png 实测 943×1668），每页完整铺满 */
+  const PAGE = { w: 943, h: 1668 };
+  const TEMPLATE_SRC = "线条小狗3.png";
   const RENDER_SCALE = 1.5; // 画布超采样倍率：文字边缘更锐利
 
   /* 内容板块（占页面宽高的比例）：
-     新模板装饰仅在顶部（y 4%~17%）与底部（y 83%~96%），中部整片空白，
-     采用单一大板块：连续可用高度约 1050px（旧双板块各约 517px），
-     词条容量翻倍，且不再在页面中部被强制分断。 */
+     像素级扫描新模板：顶部装饰（标题+两角角色）墨迹止于 y≈307，
+     底部装饰（拥抱/挥手角色）墨迹始于 y≈1473，中部 y308~1472 全宽零墨迹。
+     板块四边各留安全余量（上余 18px / 下余 22px），分隔线不会触碰装饰；
+     连续可用高度约 1126px（旧模板约 1050px），典型词条单页可容纳 6+ 条。 */
   const PANELS = [
-    { x0: 0.07, x1: 0.93, y0: 0.19, y1: 0.82 },
+    { x0: 0.08, x1: 0.92, y0: 0.195, y1: 0.87 },
   ];
 
   /* 排版样式（暖棕调，与米黄模板协调） */
@@ -38,11 +41,16 @@
     sensePx: 23,     // 释义行
     senseLH: 1.55,   // 释义行高倍数
     senseColor: "#5A4A3A",
-    gapWordPhon: 8,  // 单词行 → 音标行
-    gapPhonSense: 10,// 音标行 → 首条释义
+    gapWordPhon: 7,  // 单词行 → 音标行
+    gapPhonSense: 9, // 音标行 → 首条释义
     sepColor: "rgba(122, 98, 72, 0.28)", // 词条分隔线（细浅不抢眼）
     sepWidth: 1.5,
-    sepGap: 20,      // 分隔线上下各留间距
+    sepGap: 18,      // 分隔线上下各留间距（紧凑装填时的基础间距）
+    /* 页内纵向均布：装填完成后若板块仍有剩余高度，把词条间距均匀拉大，
+       并把整组词条垂直居中——避免词条全挤在顶部、底部大片空白。
+       相邻词条间距上限（拉到该值后剩余空间转为上下对称留白，
+       防止只有 1~2 条时撑出夸张的空隙）。 */
+    maxJustifyGap: 120,
     minFitScale: 0.8, // 超高词条自动缩字号的下限倍率
   };
 
@@ -116,6 +124,33 @@
     };
   }
 
+  /* ---------- 页内纵向均布 ----------
+     贪婪装填只看「放不放得下」，装完后板块往往有剩余高度：
+     把剩余高度均匀分摊到词条之间的间距，并把整组词条垂直居中，
+     保证 6 条左右时铺满整块、只剩 2~3 条时也居中舒展，
+     而不是全挤在顶部、底部留一大片空白。间距拉到上限后，
+     剩余空间转为上下对称留白。 */
+  function distribute(panel) {
+    const es = panel.entries;
+    const panelH = panel.rect.h;
+    if (!es.length) return;
+    const sumH = es.reduce((a, d) => a + d.m.h, 0);
+    if (es.length === 1) { // 单条：板块内垂直居中，无分隔线
+      es[0].y = Math.max(0, (panelH - sumH) / 2);
+      return;
+    }
+    const baseGap = TPL_STYLE.sepGap * 2;
+    const surplus = panelH - sumH - baseGap * (es.length - 1);
+    let gap = baseGap;
+    let topPad = 0;
+    if (surplus > 0) {
+      gap = Math.min(TPL_STYLE.maxJustifyGap, baseGap + surplus / (es.length - 1));
+      topPad = Math.max(0, (panelH - sumH - gap * (es.length - 1)) / 2);
+    }
+    let y = topPad;
+    for (const d of es) { d.y = y; y += d.m.h + gap; }
+  }
+
   /* ---------- 贪婪分页 ----------
      词条为原子单位：当前板块放不下整条 → 移入下一板块；
      板块满 → 开新页（新页使用完全相同的模板背景）。
@@ -170,6 +205,7 @@
       panel().entries.push({ entry, m, y: top });
       yCur = top + m.h;
     }
+    for (const pg of pages) for (const panel of pg.panels) distribute(panel);
     return pages;
   }
 
@@ -247,8 +283,9 @@
     for (const { rect, entries } of placed.panels) {
       entries.forEach((data, i) => {
         drawEntry(ctx, rect.x, rect.y + data.y, data.entry, { ...data.m, rect });
-        if (i < entries.length - 1) { // 分隔线仅在词条之间，不画到板块边缘外
-          const sy = rect.y + data.y + data.m.h + S.sepGap;
+        if (i < entries.length - 1) { // 分隔线仅在词条之间，不画到板块边缘外；
+          // 位置取两词条间的间距中点（均布拉开后分隔线仍居中于空隙）
+          const sy = rect.y + (data.y + data.m.h + entries[i + 1].y) / 2;
           ctx.strokeStyle = S.sepColor;
           ctx.lineWidth = S.sepWidth;
           ctx.beginPath();

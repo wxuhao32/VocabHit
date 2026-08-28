@@ -58,6 +58,11 @@ import java.util.Locale;
  *   setSystemBarsDark(dark)              状态栏/导航栏图标随主题
  *   canDrawOverlays() / requestOverlayPermission() / setOverlayEnabled(on)
  *                                        后台悬浮查词（系统级 Overlay）
+ *   setReminder(on, hour, minute)        通知提醒：用户设置变更（必要时请求通知权限）
+ *   syncReminder()                       通知提醒：按已保存设置恢复计划（启动/回前台）
+ *   updateReminderState(json)            通知提醒：接收前端任务/复习状态快照
+ *   hasNotificationPermission() / openNotificationSettings()
+ *                                        通知权限查询与跳转系统设置
  */
 public class MainActivity extends Activity {
 
@@ -72,6 +77,13 @@ public class MainActivity extends Activity {
     private String ttsText = "";
     private int ttsRemain = 0; // 剩余播放次数（连续播 2 次）
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private volatile boolean darkBg = false;           // 当前是否深色主题（恢复 WebView 背景时据此取色）
+    private volatile boolean webViewBgRestored = false; // 「首帧透明期」是否已结束（见 onCreate/onPageFinished）
+
+    /* ---------- 通知提醒 ---------- */
+    private String pendingGo = null;        // 通知点击带来的落地页（review / tasks），页面就绪后投递给前端
+    private int[] notifyPending = null;     // 等待通知权限结果后继续应用的提醒时间 {hour, minute}
+    private static final int REQ_POST_NOTIFICATIONS = 4220; // 与导出存储权限请求码（1）区分
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -91,7 +103,10 @@ public class MainActivity extends Activity {
         webView.getSettings().setSupportZoom(false);
         webView.getSettings().setBuiltInZoomControls(false);
         webView.getSettings().setDisplayZoomControls(false);
-        webView.setBackgroundColor(Color.parseColor("#F7F7F8"));
+        // 首帧透明期：文档绘制前 WebView 直接透出窗口底色（#F7F8FA，与闪屏同色），
+        // 部分设备渲染器初始帧不遵守 setBackgroundColor 会出现白闪；透明后用户所见恒为窗口底色。
+        // 文档绘制完成（onPageFinished）后恢复不透明背景，不影响后续页面切换/过度滚动观感
+        webView.setBackgroundColor(Color.TRANSPARENT);
         // 前端 console.* → logcat（VocabJS 标签）：APK 环境问题可被日志直接定位
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -116,14 +131,55 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                mainHandler.postDelayed(() -> { // 首帧透明期结束：文档已绘制，恢复不透明背景（颜色跟随当前主题）
+                    webViewBgRestored = true;
+                    webView.setBackgroundColor(darkBg ? Color.parseColor("#131315") : Color.parseColor("#F7F8FA"));
+                }, 150);
                 applyInsetVars(lastInsetTop, lastInsetBottom, lastInsetIme); // 页面就绪后重放安全区
+                deliverPendingGo(); // 页面就绪：投递通知点击带来的落地页
             }
         });
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         setContentView(webView);
         PDFBoxResourceLoader.init(getApplicationContext()); // PDFBox 字体资源从 APK 加载（PDF 文本层解析前置条件）
         setupEdgeToEdge();
+        // 通知提醒：每次进程启动都按已保存设置校正一次计划
+        // （兜住 BOOT_COMPLETED 被 ROM 拦截、应用更新、用户修改系统时间等场景）
+        ReminderScheduler.syncFromPrefs(this);
+        pendingGo = readGoExtra(getIntent()); // 通知点击（App 未打开时的冷启动）的落地页
         webView.loadUrl("file:///android_asset/www/index.html");
+    }
+
+    /* ---------- 通知提醒：通知点击 → 进入对应页面 ---------- */
+
+    /** 取出并清除 Intent 中的落地页标记（清除避免旋转/重建后重复跳转） */
+    private String readGoExtra(Intent it) {
+        if (it == null) return null;
+        String go = it.getStringExtra(ReminderScheduler.EXTRA_GO);
+        if (ReminderScheduler.GO_REVIEW.equals(go) || ReminderScheduler.GO_TASKS.equals(go)) {
+            it.removeExtra(ReminderScheduler.EXTRA_GO);
+            return go;
+        }
+        return null;
+    }
+
+    /** 前端 window.__vhGo('review'|'tasks') → 打开 Review 页 / 学习任务页 */
+    private void deliverPendingGo() {
+        if (pendingGo == null || webView == null) return;
+        final String go = pendingGo;
+        pendingGo = null;
+        webView.evaluateJavascript("window.__vhGo&&window.__vhGo('" + go + "')", null);
+    }
+
+    /** App 已在后台存活时点击通知：走 onNewIntent（不重建 WebView） */
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String go = readGoExtra(intent);
+        if (go == null) return;
+        pendingGo = go;
+        deliverPendingGo();
     }
 
     /* ---------- 前后台互斥：应用在前台时隐藏系统悬浮条 ----------
@@ -447,8 +503,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setSystemBarsDark(final boolean dark) {
             runOnUiThread(() -> {
+                darkBg = dark;
                 setBarAppearance(dark);
-                webView.setBackgroundColor(Color.parseColor(dark ? "#131315" : "#F7F7F8"));
+                if (webViewBgRestored) webView.setBackgroundColor(dark ? Color.parseColor("#131315") : Color.parseColor("#F7F8FA"));
+                // 首帧透明期内保持透明（由 onPageFinished 按 darkBg 统一恢复），避免破坏无缝启动
             });
         }
 
@@ -574,6 +632,67 @@ public class MainActivity extends Activity {
             OverlayService.requestCollapse(MainActivity.this);
         }
 
+        /* ---------- 通知提醒（系统 AlarmManager + 原生通知，纯新增段） ----------
+           前端只负责「设置」与「推送状态快照」，排程/取消/重启恢复/发通知全部在原生完成，
+           因此 App 未打开、甚至进程被杀也能按用户设定的时间提醒。 */
+
+        /** 用户修改提醒设置：开 → 必要时先申请通知权限再排程；关 → 取消已设定的提醒。
+            改时间同样走这里：旧闹钟由同一个 PendingIntent 覆盖替换，不会重复提醒。 */
+        @JavascriptInterface
+        public void setReminder(final boolean on, final int hour, final int minute) {
+            if (on && !notificationsEnabled()) {
+                notifyPending = new int[]{ hour, minute };
+                if (Build.VERSION.SDK_INT >= 33) {
+                    runOnUiThread(() -> requestPermissions(
+                            new String[]{ "android.permission.POST_NOTIFICATIONS" }, REQ_POST_NOTIFICATIONS));
+                } else {
+                    // Android 8-12：无运行时权限，通知开关在系统设置里，引导用户去开启
+                    openNotificationSettings();
+                }
+                return;
+            }
+            ReminderScheduler.apply(MainActivity.this, on, hour, minute);
+        }
+
+        /** 启动 / 回前台时按已保存设置校正计划（不主动申请权限，避免打断用户） */
+        @JavascriptInterface
+        public void syncReminder() {
+            ReminderScheduler.syncFromPrefs(MainActivity.this);
+        }
+
+        /** 前端任务或复习数据变化后推送的快照（见 ReminderState） */
+        @JavascriptInterface
+        public void updateReminderState(final String json) {
+            ReminderPrefs.saveSnapshot(MainActivity.this, json);
+        }
+
+        /** 系统通知是否已开启（Android 8 以下恒为开启） */
+        @JavascriptInterface
+        public boolean hasNotificationPermission() {
+            return notificationsEnabled();
+        }
+
+        /** 跳转本应用的系统通知设置页（用户在系统里关掉通知后自行恢复） */
+        @JavascriptInterface
+        public void openNotificationSettings() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent();
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        it.setAction(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                        it.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                    } else {
+                        it.setAction(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                        it.setData(Uri.parse("package:" + getPackageName()));
+                    }
+                    it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(it);
+                } catch (Exception e) {
+                    toast("无法打开通知设置");
+                }
+            });
+        }
+
         /* ---------- Knowledge 模块：学习文档选择（纯新增，结果经 window.__onDocParsed 回调前端） ---------- */
 
         @JavascriptInterface
@@ -694,6 +813,27 @@ public class MainActivity extends Activity {
                 if (f.exists()) f.delete();
             } catch (Exception ignored) { }
         }
+    }
+
+    /* ---------- 通知提醒：权限结果回调 ---------- */
+
+    /** 系统通知是否可用（Android 8 以下无此开关，恒为可用） */
+    private boolean notificationsEnabled() {
+        try {
+            return androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled();
+        } catch (Exception e) {
+            return true; // 查询失败按可用处理，实际发送时系统自行忽略
+        }
+    }
+
+    /** 通知权限结果注入前端：window.__onNotifyPermission(true|false) */
+    private void emitNotifyPermission(final boolean granted) {
+        runOnUiThread(() -> {
+            if (webView != null) {
+                webView.evaluateJavascript("window.__onNotifyPermission&&window.__onNotifyPermission("
+                        + granted + ")", null);
+            }
+        });
     }
 
     /* ---------- Knowledge 模块：文档/图片解析结果回传（纯新增段，不影响既有导出/权限流程） ---------- */
@@ -949,6 +1089,14 @@ public class MainActivity extends Activity {
         } else if (code == 1) {
             pendingExport = null;
             toast("需要存储权限才能导出");
+        } else if (code == REQ_POST_NOTIFICATIONS) {
+            // 通知权限：授予 → 按用户设定的时间排程；拒绝 → 不排程，由前端把开关复位
+            final int[] p = notifyPending;
+            notifyPending = null;
+            boolean granted = results != null && results.length > 0
+                    && results[0] == PackageManager.PERMISSION_GRANTED;
+            if (p != null) ReminderScheduler.apply(this, granted, p[0], p[1]);
+            emitNotifyPermission(granted);
         }
     }
 

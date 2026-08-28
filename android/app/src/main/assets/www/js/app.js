@@ -117,6 +117,17 @@ function senseLines(word) {
   return sensesOf(d).map(([pos, senses]) => `${pos ? pos + " " : ""}${senses.join("；")}`);
 }
 
+/** 词典详情 / 相关释义卡片：释义分级 HTML。
+    考研词书 → 每行「词性 + 逐条等级着色释义 + 「僻」角标」（全局同一套等级数据）；
+    ECDICT / 其他来源 → 保持原有纯文本释义行（本功能不涉及）。 */
+function detailMeaningsHtml(word) {
+  const g = window.KY ? KY.kyLevel(word) : null;
+  if (!g) return senseLines(word).map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("");
+  return g.rows.map((row) =>
+    `<p class="detail-meaning">${row.pos ? `${esc(row.pos)} ` : ""}${KY.kyJoin(row.meanings)}</p>`
+  ).join("");
+}
+
 function phoneticOf(word) {
   const d = dictGet(word);
   return d && (d.ph || d.p) ? `/${(d.ph || d.p)}/` : "";
@@ -454,11 +465,28 @@ function playNextSound() {
   } catch (_) { /* 静默 */ }
 }
 
+/* ---------- MCQ 选择题音效 ----------
+   答对：复用 next.mp3（与拼写正确的「滴」声一致）
+   答错：用户提供的「错误提示音.mp3」 */
+const errorSoundRef = new Audio("%E9%94%99%E8%AF%AF%E6%8F%90%E7%A4%BA%E9%9F%B3.mp3");
+function playCorrectSound() { playNextSound(); }
+function playErrorSound() {
+  try {
+    errorSoundRef.currentTime = 0;
+    const p = errorSoundRef.play();
+    if (p && p.catch) p.catch(() => {});
+  } catch (_) { /* 静默 */ }
+}
+
 function wordHTML(word, count) {
   return `${esc(word)}<sup class="count">${count}</sup>`;
 }
 
 const TRASH_SVG = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7.2v4M9.3 7.2v4"/></svg>`;
+// 目标行图标：靶子（同心圆 + 实心靶心）
+const GOAL_SVG = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="7.2"/><circle cx="10" cy="10" r="3.9"/><circle cx="10" cy="10" r="1.1" fill="currentColor" stroke="none"/></svg>`;
+// 奖励行图标：宝箱（拱形盖 + 箱体 + 中央锁扣）
+const REWARD_SVG = `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5v6A1.5 1.5 0 0 0 5 17h10a1.5 1.5 0 0 0 1.5-1.5v-6"/><path d="M3.5 9.5C3.5 6.2 6 4 10 4s6.5 2.2 6.5 5.5"/><path d="M3.5 9.5h13"/><path d="M8.6 9.5h2.8v2.4a1.4 1.4 0 0 1-2.8 0z" fill="currentColor" stroke="none"/></svg>`;
 
 /* ============================================================
    Review 复习系统（独立模块，与查询次数完全分离；vc-review 持久化）
@@ -491,6 +519,7 @@ function loadReview() {
 
 function saveReview() {
   localStorage.setItem(REVIEW_KEY, JSON.stringify(reviewStore));
+  pushReminderState(); // 通知提醒：复习进度变化 → 同步快照给原生（到点判断是否已复习完）
 }
 
 /** 次日 04:00 时间戳（词汇日 D 的下一天 D+1 从 04:00 开始；新词当天不复习，第二天自动进队列） */
@@ -637,26 +666,35 @@ function answerReview(word, result) {
 
 const REVIEW_SESSION_KEY = "vc-review-session-v2";
 
-// 新会话状态结构
+// 新会话状态结构（task pool 任务池模式）
+// 每个单词拆为 3 个独立任务（recall / w2m / m2w），全部打乱后统一排队。
+// 任务池随机出题，用户无法预测下一题类型。
+// 每种状态独立完成：答错只重复该状态，不影响其他两种。
 let reviewSession = {
   day: "",
   phase: "meaning",     // "meaning" | "transition" | "spell" | "done"
-  // Phase 1
-  queue: [],            // 当天队列（模糊/不认识会被放回队尾追加，长度可增长）
-  idx: 0,
-  step: "answer",       // "answer" | "detail"
-  current: null,
-  lastResult: null,
-  snapshot: null,
+  // Phase 1 — 任务池
+  queue: [],            // 任务池 [{word, step:"recall"|"w2m"|"m2w"}]
+  idx: 0,               // 当前任务索引
+  current: null,         // 当前单词（便捷引用）
+  currentTask: null,     // 当前任务对象
+  lastResult: null,      // 最近一次 recall 判断（known/fuzzy/unknown）
+  snapshot: null,        // 记错了回滚快照
   stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
-  // 当天会话状态（与长期 Review 状态分离）：
-  //   answeredToday —— 已做过「当天首次判断」（长期间隔算法基准已锁定）的词，
-  //                    当天重复出现只决定是否继续排队，绝不再触碰长期算法
-  //   initialCount  —— 当天初始队列长度（过渡/完成页文案基数；重复重排不计入）
+  // MCQ 选择题
+  mcqData: null,         // 当前 MCQ 题目数据
+  mcqStats: { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 },
+  // 任务完成跟踪
+  completed: {},         // { "word|step": true } 已完成的任务
+  wordResults: {},       // { word: { recall:"known"|"fuzzy"|"unknown", w2m:true|false, m2w:true|false } }
+  wordsDone: {},         // { word: true } 三种全部完成的单词
+  // 详情页上下文（MCQ 答错后进入详情页，需要知道返回后做什么）
+  detailCtx: null,       // { task, action:"complete"|"retry" }
+  // 当天会话状态
   answeredToday: {},
   initialCount: 0,
   // Phase 2
-  spellQueue: [],       // 随机打乱后的拼写队列（跳过的词放回队尾，直到拼写正确）
+  spellQueue: [],
   spellIdx: 0,
   spell: { submitted: false, correct: false, input: "" },
   spellStats: { correct: 0, wrong: 0, skipped: 0 },
@@ -680,29 +718,386 @@ function shuffleArray(arr) {
   return result;
 }
 
-/** 读取并恢复会话 */
+/* ============================================================
+   MCQ 选择题 — 干扰项生成算法
+   ------------------------------------------------------------
+   两种选择题共用词典数据（DICT_KEYS / DICT_DATA / ECDICT），
+   纯只读查询，绝不修改任何词典或会话状态。
+   ============================================================ */
+
+/** 中文释义→纯释义文本（去掉词性前缀），用于长度/字符比较 */
+function stripPos(meaning) {
+  return String(meaning).replace(/^[^\u4e00-\u9fa5a-zA-Z]*[a-z]+\.\s*/, "").trim();
+}
+
+/** 两个中文字符串共享的字符数 */
+function sharedChineseChars(a, b) {
+  let count = 0;
+  const setB = new Set(b);
+  for (const ch of a) { if (setB.has(ch)) count++; }
+  return count;
+}
+
+/**
+ * 提取单词的前 N 条释义，拼接为单行文本（用于 MCQ 选项显示）
+ * @param {string} word 单词
+ * @param {number} maxSenses 最多取几条（默认 2）
+ * @returns {string} 拼接后的释义文本，如 "制造商；生产商" 
+ */
+function topSensesText(word, maxSenses = 2) {
+  const d = dictGet(word);
+  if (!d) return "";
+  const senses = sensesOf(d);
+  const parts = [];
+  for (const [, defs] of senses) {
+    for (const def of (defs || [])) {
+      parts.push(def);
+      if (parts.length >= maxSenses) return parts.join("；");
+    }
+  }
+  return parts.join("；");
+}
+
+/**
+ * 提取单词的全部释义，拼接为多行文本（用于 MCQ 题目显示）
+ * @param {string} word 单词
+ * @returns {string} 全部释义拼接（用换行分隔）
+ */
+function allSensesText(word) {
+  const d = dictGet(word);
+  if (!d) return "";
+  const senses = sensesOf(d);
+  const parts = [];
+  for (const [, defs] of senses) {
+    for (const def of (defs || [])) {
+      parts.push(def);
+    }
+  }
+  return parts.join("；");
+}
+
+/**
+ * 单词→选释义：生成 3 个干扰项，每项包含 2 条释义 + 源单词（用于长按）
+ * 形近干扰逻辑（本次修正）：
+ *   正确逻辑：用户看到目标英文单词 → 从 4 个中文释义中选正确释义。
+ *   - 1 个为目标单词的真实释义（Top2 主要释义完整显示）
+ *   - 另外 3 个干扰项来自「拼写/外形与目标单词相似，但实际含义完全不同」的其他英文单词
+ *   - 干扰项优先从考研词书（DICT_KEYS / DICT_DATA）中选择
+ *   - 利用现有形近静态对照（editDistance / 长度差 / 首字母等）优先寻找候选
+ *   - 排除同词根/派生/词形变化（sameRoot）及语义明显相关的词（中文释义共享字符≥2）
+ *   - 将这些形近但意思无关的词对应的中文释义（Top2）作为干扰项
+ *   - 若形近候选不足 3 个，则随机兜底补齐（仍排除同根与语义相关），确保始终 4 选 1
+ * @returns {{text: string, word: string}[]}  干扰项数组
+ */
+function generateMeaningDistractors(word, correctMeaning, count = 3) {
+  const target = String(word || "").trim().toLowerCase();
+  if (!target) return [];
+  const dTarget = dictGet(target);
+  if (!dTarget) return [];
+  // 正确释义文本（用于语义去重/过滤）：Top2 展示文本 + 首条去词性纯中文
+  const correctDisplay = topSensesText(target, 2);
+  const sensesTarget = sensesOf(dTarget);
+  const firstRaw = (correctMeaning && String(correctMeaning).trim())
+    || (sensesTarget[0] && sensesTarget[0][1] && sensesTarget[0][1][0])
+    || (correctDisplay.split("；")[0] || "");
+  const correctFirst = stripPos(firstRaw);
+  const correctCombined = stripPos(correctDisplay);
+  if (!correctFirst && !correctCombined) return [];
+
+  // 语义关联判定：共享中文字符≥2 视为明显相关，予以排除（"的"等单字共有不算）
+  function isSemanticallyRelated(candFirst) {
+    if (!candFirst || !correctFirst) return false;
+    if (candFirst === correctFirst || candFirst === correctCombined) return true;
+    if (sharedChineseChars(candFirst, correctFirst) >= 2) return true;
+    if (correctCombined && sharedChineseChars(candFirst, correctCombined) >= 3) return true;
+    return false;
+  }
+
+  const candidates = [];
+  for (const w of DICT_KEYS) {
+    if (w === target) continue;
+    if (sameRoot(w, target)) continue; // 排除同词根/派生/词形变化
+    const lenDiff = Math.abs(w.length - target.length);
+    if (lenDiff > 3) continue; // 形近：长度差太大直接排除
+    const d = DICT_DATA[w];
+    if (!d || !d.senses || !d.senses.length) continue;
+    const firstDefs = d.senses[0] && d.senses[0][1];
+    if (!firstDefs || !firstDefs.length) continue;
+    const candFirst = stripPos(firstDefs[0]);
+    if (!candFirst) continue;
+    if (isSemanticallyRelated(candFirst)) continue; // 排除语义相关
+    const ed = editDistance(w, target);
+    let score = -ed * 2 - lenDiff;
+    if (w[0] === target[0]) score += 3;
+    if (w.length > 1 && target.length > 1 && w[1] === target[1]) score += 1;
+    candidates.push({ w, score, ed, candFirst });
+  }
+  candidates.sort((a, b) => b.score - a.score || Math.random() - 0.5);
+
+  const seen = new Set();
+  if (correctDisplay) seen.add(correctDisplay);
+  if (correctFirst) seen.add(correctFirst);
+  if (correctCombined) seen.add(correctCombined);
+
+  const result = [];
+  for (const c of candidates) {
+    const display = topSensesText(c.w, 2) || stripPos(DICT_DATA[c.w].senses[0][1][0]);
+    if (!display) continue;
+    const key = stripPos(display.split("；")[0]);
+    if (seen.has(display) || seen.has(key)) continue;
+    if (isSemanticallyRelated(key)) continue;
+    seen.add(display);
+    seen.add(key);
+    result.push({ text: display, word: c.w });
+    if (result.length >= count) break;
+  }
+
+  // 兜底：形近候选不足时，随机补齐（仍排除同根与语义相关，去重）
+  if (result.length < count) {
+    const existing = new Set(result.map(r => r.word));
+    existing.add(target);
+    const pool = [];
+    for (const w of DICT_KEYS) {
+      if (existing.has(w)) continue;
+      if (sameRoot(w, target)) continue;
+      const d = DICT_DATA[w];
+      if (!d || !d.senses || !d.senses.length) continue;
+      const firstDefs = d.senses[0] && d.senses[0][1];
+      if (!firstDefs || !firstDefs.length) continue;
+      const candFirst = stripPos(firstDefs[0]);
+      if (!candFirst) continue;
+      if (isSemanticallyRelated(candFirst)) continue;
+      const display = topSensesText(w, 2);
+      if (!display) continue;
+      const key = stripPos(display.split("；")[0]);
+      if (seen.has(display) || seen.has(key)) continue;
+      pool.push({ w, display, key });
+    }
+    // Fisher-Yates 随机打乱
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    for (const p of pool) {
+      if (result.length >= count) break;
+      if (seen.has(p.display) || seen.has(p.key)) continue;
+      seen.add(p.display);
+      seen.add(p.key);
+      result.push({ text: p.display, word: p.w });
+    }
+  }
+  return result;
+}
+
+/**
+ * 两个英文单词的编辑距离（简化版：仅用于相似度评分）
+ */
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i-1] === b[j-1]
+        ? dp[i-1][j-1]
+        : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+    }
+  }
+  return dp[m][n];
+}
+
+/**
+ * 判断两个英文单词是否同词根/词形变化（排除为干扰项）
+ * 规则：共享前缀长度 > min(len)*0.6 视为同根
+ */
+function sameRoot(a, b) {
+  const la = a.toLowerCase(), lb = b.toLowerCase();
+  let prefixLen = 0;
+  const minLen = Math.min(la.length, lb.length);
+  for (let i = 0; i < minLen; i++) {
+    if (la[i] === lb[i]) prefixLen++;
+    else break;
+  }
+  return prefixLen > minLen * 0.6;
+}
+
+/**
+ * 释义→选单词：生成 3 个英文干扰项
+ * @param {string} word   目标单词
+ * @param {number} count  干扰项数量（默认 3）
+ * @returns {string[]}    干扰项单词数组（不含正确单词）
+ */
+function generateWordDistractors(word, count = 3) {
+  const target = word.toLowerCase();
+  const targetLen = target.length;
+  if (targetLen === 0) return [];
+
+  const candidates = [];
+  for (const w of DICT_KEYS) {
+    if (w === target) continue;
+    if (sameRoot(w, target)) continue; // 排除同词根/词形变化
+    const lenDiff = Math.abs(w.length - targetLen);
+    if (lenDiff > 3) continue; // 长度差太大
+    // 评分：长度差越小越好 + 首字母相同加分 + 编辑距离越小越好
+    const ed = editDistance(w, target);
+    let score = -ed * 2 - lenDiff;
+    if (w[0] === target[0]) score += 3; // 首字母相同加分
+    candidates.push({ word: w, score });
+  }
+
+  candidates.sort((a, b) => b.score - a.score || Math.random() - 0.5);
+  const result = [];
+  for (const c of candidates) {
+    result.push(c.word);
+    if (result.length >= count) break;
+  }
+  return result;
+}
+
+/**
+ * 构建 MCQ 题目数据
+ * @param {"w2m"|"m2w"} type  题目类型
+ * @param {string} word        目标单词
+ * @returns {object|null}      { question, options[], correctIdx, optionWords[] }
+ *   optionWords[i] = 该选项对应的单词（w2m 时为选项释义所属单词，m2w 时为选项单词）
+ */
+function buildMcqData(type, word) {
+  const d = dictGet(word);
+  if (!d) return null;
+
+  if (type === "w2m") {
+    // 单词→选释义：每个选项展示 2 条释义
+    const senses = sensesOf(d);
+    if (!senses.length || !senses[0][1] || !senses[0][1].length) return null;
+    const firstMeaning = senses[0][1][0];
+    const correctText = topSensesText(word, 2); // 正确选项：前 2 条释义
+    const distractors = generateMeaningDistractors(word, firstMeaning, 3);
+    if (distractors.length < 1) return null;
+    // 构建选项数组：{text: 显示文本, word: 对应单词}
+    const correctOpt = { text: correctText, word: word };
+    const allOpts = shuffleArray([correctOpt, ...distractors]);
+    const correctIdx = allOpts.indexOf(correctOpt);
+    const optionTexts = allOpts.map(o => o.text);
+    const optionWords = allOpts.map(o => o.word);
+    return { question: word, options: optionTexts, correctIdx, type: "w2m", optionWords };
+  }
+
+  if (type === "m2w") {
+    // 释义→选单词：题目显示完整释义集合
+    const senses = sensesOf(d);
+    if (!senses.length || !senses[0][1] || !senses[0][1].length) return null;
+    const fullQuestion = allSensesText(word); // 全部释义
+    const distractors = generateWordDistractors(word, 3);
+    if (distractors.length < 1) return null;
+    const options = shuffleArray([word, ...distractors]);
+    const correctIdx = options.indexOf(word);
+    return { question: fullQuestion, options, correctIdx, type: "m2w", optionWords: options };
+  }
+
+  return null;
+}
+
+/** 构建任务池（三态队列）：
+    第一段 = 第一态「回忆」：严格按当天待复习顺序逐词一次（A→B→C→…）；
+    第二段 = 后两态「看词选义 + 看义选词」：所有单词的两种考察混入同一队列完全随机打乱，
+    且同一单词的两态不相邻（不连续考察同一个词）。拼写仍是独立阶段，不进本队列。 */
+function buildTaskPool(words) {
+  const tasks = [];
+  // 第一态：按原本待复习顺序，每词仅判断一次
+  words.forEach(w => tasks.push({ word: w, step: "recall" }));
+  // 后两态：同一混合队列，完全随机且同词不相邻（承接最后一词的回忆，避免回忆→选择题同词相连）
+  const mixed = [];
+  words.forEach(w => {
+    mixed.push({ word: w, step: "w2m" });
+    mixed.push({ word: w, step: "m2w" });
+  });
+  return tasks.concat(buildMixedQueue(mixed, words.length ? words[words.length - 1] : null));
+}
+
+/** 后两态混合队列：完全随机打乱（Fisher-Yates 拒绝采样），同一单词的两种考察不相邻。
+    每词恰有两个任务时单词数 ≥2 必有解，随机排列命中率高（n≥5 几乎一次通过）；
+    仅 1 词时无法避免相邻，兜底随机顺序。 */
+function buildMixedQueue(tasks, prevWord) {
+  if (tasks.length <= 1) return tasks.slice();
+  const ok = (arr) => arr.every((t, i) =>
+    t.word !== (i === 0 ? prevWord : arr[i - 1].word));
+  for (let tries = 0; tries < 1000; tries++) {
+    const arr = shuffleArray(tasks);
+    if (ok(arr)) return arr;
+  }
+  return shuffleArray(tasks); // 理论上不可达（每词两任务且 ≥2 词必有解）
+}
+
+/** 识别旧版任务池（三任务整体打乱、无「先回忆后混合」结构）：
+    新格式中未完成的 recall 必连续位于剩余队列最前段，且保持当天待复习相对顺序 */
+function isStaleTaskPool(s) {
+  let sawNonRecall = false;
+  for (let i = s.idx; i < s.queue.length; i++) {
+    const t = s.queue[i];
+    const key = t.word + "|" + t.step;
+    if (s.completed[key]) continue;
+    if (t.step !== "recall") { sawNonRecall = true; continue; }
+    if (sawNonRecall) return true; // 混合段之后仍有未完成的回忆任务 → 旧格式（或结构损坏）
+  }
+  return false;
+}
+
+/** 读取并恢复会话（支持旧格式迁移） */
 function loadReviewSession() {
   try {
     const s = JSON.parse(localStorage.getItem(REVIEW_SESSION_KEY) || "null");
     if (s && s.day === vocabDay() && Array.isArray(s.queue) && s.queue.length > 0) {
+      // 检测旧格式（queue 元素是字符串而非对象）→ 废弃旧会话，重建
+      if (typeof s.queue[0] === "string") {
+        return null; // 旧格式 → 返回 null 让 openReview 重建
+      }
+
       // 与生词本同步：过滤掉已删除的词
-      s.queue = s.queue.filter((w) => reviewStore.words[w] && isStarred(w));
+      s.queue = s.queue.filter(t => t && t.word && reviewStore.words[t.word] && isStarred(t.word));
       if (s.queue.length === 0) return null;
+
+      // 旧版「三任务整体打乱」任务池不符合新三态结构（第一态顺序 + 后两态混合）→ 废弃重建；
+      // 判断仅在当天首次回忆前调用，重建不会造成重复计入记忆曲线（answerReview 延迟到单词三态全部完成）
+      if (isStaleTaskPool(s)) return null;
 
       // Phase 1 恢复
       s.idx = Math.min(s.idx || 0, s.queue.length);
       if (!s.stats) s.stats = { n: 0, known: 0, fuzzy: 0, unknown: 0 };
-      // 当天会话字段（旧会话无此字段时兜底：answeredToday 空 = 恢复后按新逻辑继续，
-      // 行为与旧版一致，不会更糟；initialCount 以当前队列长度近似）
       if (!s.answeredToday || typeof s.answeredToday !== "object") s.answeredToday = {};
-      if (!s.initialCount || s.initialCount < 1) s.initialCount = s.queue.length;
-      
-      // Phase 2 恢复（如果已进入拼写阶段）
-      if (s.phase === "spell" || s.phase === "done") {
-        if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
-          s.spellQueue = shuffleArray(Array.from(new Set(s.queue))); // 去重（queue 含队末重排重复项）
+      if (!s.initialCount || s.initialCount < 1) s.initialCount = Math.ceil(s.queue.length / 3);
+      if (!s.completed || typeof s.completed !== "object") s.completed = {};
+      if (!s.wordResults || typeof s.wordResults !== "object") s.wordResults = {};
+      if (!s.wordsDone || typeof s.wordsDone !== "object") s.wordsDone = {};
+      if (!s.mcqStats) s.mcqStats = { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 };
+      // 恢复当前任务引用
+      if (s.idx < s.queue.length) {
+        s.currentTask = s.queue[s.idx];
+        s.current = s.currentTask.word;
+      }
+      // MCQ 数据恢复
+      if (s.currentTask && s.currentTask.step !== "recall" && !s.mcqData) {
+        // MCQ 任务但无题目数据 → 重建
+        const mcqType = s.currentTask.step;
+        s.mcqData = buildMcqData(mcqType, s.currentTask.word);
+        if (!s.mcqData) {
+          // 词典数据不足 → 跳过该任务
+          s.completed[s.currentTask.word + "|" + s.currentTask.step] = true;
+          s.idx++;
+          s.currentTask = s.idx < s.queue.length ? s.queue[s.idx] : null;
+          s.current = s.currentTask ? s.currentTask.word : null;
         }
-        s.spellQueue = s.spellQueue.filter((w) => reviewStore.words[w] && isStarred(w));
+      }
+      
+      // Phase 2 恢复
+      if (s.phase === "spell" || s.phase === "done") {
+        const uniqueWords = [...new Set(s.queue.map(t => t.word))];
+        if (!Array.isArray(s.spellQueue) || s.spellQueue.length === 0) {
+          s.spellQueue = shuffleArray(uniqueWords);
+        }
+        s.spellQueue = s.spellQueue.filter(w => reviewStore.words[w] && isStarred(w));
         s.spellIdx = Math.min(s.spellIdx || 0, s.spellQueue.length);
         if (!s.spellStats) s.spellStats = { correct: 0, wrong: 0, skipped: 0 };
         if (!s.spell) s.spell = { submitted: false, correct: false, input: "" };
@@ -739,18 +1134,27 @@ function openReview() {
       return;
     }
     
+    // 构建任务池：第一态按待复习顺序，后两态混合随机（同词不相邻）
+    const taskPool = buildTaskPool(queue);
+    rvMcqAutoSpoken = {}; // 新会话：重置「看词选义」自动播报标记（每题仅自动播报一次）
     reviewSession = {
       day: vocabDay(),
       phase: "meaning",
-      queue: queue,
+      queue: taskPool,
       idx: 0,
-      step: "answer",
       current: null,
+      currentTask: null,
       lastResult: null,
       snapshot: null,
       stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 },
       answeredToday: {},
       initialCount: queue.length,
+      mcqData: null,
+      mcqStats: { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 },
+      completed: {},
+      wordResults: {},
+      wordsDone: {},
+      detailCtx: null,
       spellQueue: [],
       spellIdx: 0,
       spell: { submitted: false, correct: false, input: "" },
@@ -762,6 +1166,8 @@ function openReview() {
   // 进入沉浸模式
   document.body.classList.add("review-active");
   switchTab("review");
+  // 预加载 Review 队列中考研词书未收录的词（如 manufacturer），确保 MCQ 同步取义可用
+  Promise.all([...new Set(reviewSession.queue.map((t) => t.word))].map((w) => dictGetAsync(w))).catch(() => {});
   renderReviewByPhase();
 }
 
@@ -770,15 +1176,55 @@ function renderReviewByPhase() {
   const body = $("#review-body");
   
   if (reviewSession.phase === "meaning") {
+    // 跳过已完成的任务（可能被标记为 completed 但仍在队列中）
+    while (reviewSession.idx < reviewSession.queue.length) {
+      const t = reviewSession.queue[reviewSession.idx];
+      const key = t.word + "|" + t.step;
+      if (reviewSession.completed[key]) {
+        reviewSession.idx++;
+        continue;
+      }
+      break;
+    }
     if (reviewSession.idx >= reviewSession.queue.length) {
       // Phase 1 完成，进入过渡页
       reviewSession.phase = "transition";
       saveReviewSession();
       return rvRender(() => renderTransition(body));
     }
-    reviewSession.current = reviewSession.queue[reviewSession.idx];
-    if (reviewSession.step === "detail") {
-      return rvRender(() => renderDetail(body));
+    const task = reviewSession.queue[reviewSession.idx];
+    reviewSession.currentTask = task;
+    reviewSession.current = task.word;
+
+    // 按任务类型路由（进度由各渲染函数统一调用 rvMeaningProgress）
+    if (task.step === "recall") {
+      return rvRender(() => renderMeaning(body));
+    }
+    if (task.step === "w2m") {
+      // 构建 MCQ 数据（如果还没有）
+      if (!reviewSession.mcqData || reviewSession.mcqData.type !== "w2m" || reviewSession.mcqData.question !== task.word) {
+        reviewSession.mcqData = buildMcqData("w2m", task.word);
+        if (!reviewSession.mcqData) {
+          // 词典数据不足 → 跳过该任务
+          reviewSession.completed[task.word + "|w2m"] = true;
+          reviewSession.idx++;
+          saveReviewSession();
+          return renderReviewByPhase(); // 递归处理下一个任务
+        }
+      }
+      return rvRender(() => renderMcqWord2Meaning(body));
+    }
+    if (task.step === "m2w") {
+      if (!reviewSession.mcqData || reviewSession.mcqData.type !== "m2w" || reviewSession.mcqData.question !== task.word) {
+        reviewSession.mcqData = buildMcqData("m2w", task.word);
+        if (!reviewSession.mcqData) {
+          reviewSession.completed[task.word + "|m2w"] = true;
+          reviewSession.idx++;
+          saveReviewSession();
+          return renderReviewByPhase();
+        }
+      }
+      return rvRender(() => renderMcqMean2Word(body));
     }
     return rvRender(() => renderMeaning(body));
   }
@@ -872,12 +1318,18 @@ function rvRender(fn) {
   }, 300);
 }
 
+/** 统一进度计算：基于已完成任务数 / 任务池总数 */
+function rvMeaningProgress() {
+  const totalTasks = reviewSession.queue.length;
+  const doneTasks = Object.keys(reviewSession.completed).length;
+  rvSetProgress(doneTasks + 1, totalTasks);
+}
+
 /** Phase 1: 词义复习 - 回忆页（单词舞台中央，顶部进度，底部判断区） */
 function renderMeaning(body) {
   const word = reviewSession.current;
-  const total = reviewSession.queue.length;
   
-  rvSetProgress(reviewSession.idx + 1, total);
+  rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-meaning rv-screen">
     <div class="rv-stage">
@@ -916,20 +1368,26 @@ function renderMeaning(body) {
 /** Phase 1: 词义复习 - 释义确认页（单词头部 → 词性/释义列表 → 底部操作） */
 function renderDetail(body) {
   const word = reviewSession.current;
-  const total = reviewSession.queue.length;
-  const last = reviewSession.lastResult;
+  const ctx = reviewSession.detailCtx;
+  const isRecallDetail = ctx && ctx.task && ctx.task.step === "recall";
+  const isMcqWrong = ctx && ctx.action === "retry";
   
-  // 判断印记颜色
-  const indicatorClass = last === "known" ? "rv-detail-indicator--known" 
-                       : last === "fuzzy" ? "rv-detail-indicator--fuzzy" 
+  // 判断印记颜色：recall 详情用 recall 结果，MCQ 答错用 unknown 色
+  const resultForColor = isMcqWrong ? "unknown" : reviewSession.lastResult;
+  const indicatorClass = resultForColor === "known" ? "rv-detail-indicator--known" 
+                       : resultForColor === "fuzzy" ? "rv-detail-indicator--fuzzy" 
                        : "rv-detail-indicator--unknown";
   
   const senses = rvSenseRows(word);
-  const sensesHtml = senses.length
-    ? senses.map((s) => `<div class="rv-sense">${s.pos ? `<span class="rv-pos">${esc(s.pos)}</span>` : ""}<p class="rv-sense-meaning">${esc(s.meaning)}</p></div>`).join("")
-    : `<div class="rv-sense"><p class="rv-sense-meaning" style="color:var(--text-2);">暂无释义</p></div>`;
+  // 考研词书 → 逐条释义按统一等级着色（含「僻」角标）；其他来源 → 原有纯文本
+  const g = window.KY ? KY.kyLevel(word) : null;
+  const sensesHtml = g
+    ? g.rows.map((row) => `<div class="rv-sense">${row.pos ? `<span class="rv-pos">${esc(row.pos)}</span>` : ""}<p class="rv-sense-meaning">${KY.kyJoin(row.meanings)}</p></div>`).join("")
+    : (senses.length
+      ? senses.map((s) => `<div class="rv-sense">${s.pos ? `<span class="rv-pos">${esc(s.pos)}</span>` : ""}<p class="rv-sense-meaning">${esc(s.meaning)}</p></div>`).join("")
+      : `<div class="rv-sense"><p class="rv-sense-meaning" style="color:var(--text-2);">暂无释义</p></div>`);
   
-  rvSetProgress(reviewSession.idx + 1, total);
+  rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-detail rv-screen">
     <div class="rv-detail-head">
@@ -944,28 +1402,225 @@ function renderDetail(body) {
       ${sensesHtml}
     </div>
     <div class="rv-detail-actions">
-      <button class="rv-btn-wrong" id="review-wrong" type="button">记错了</button>
-      <button class="rv-btn-next" id="review-next" type="button">下一个</button>
+      ${isRecallDetail ? '<button class="rv-btn-wrong" id="review-wrong" type="button">记错了</button>' : ""}
+      <button class="rv-btn-next" id="review-next" type="button">${isMcqWrong ? "继续" : "下一个"}</button>
     </div>
   </div>`;
   
-  // 自动播放 TTS 一次（帮助音义绑定）
-  setTimeout(() => ttsSpeak(word, 1), 200);
+  // 自动播放 TTS：仅 recall 详情时
+  if (isRecallDetail) {
+    setTimeout(() => ttsSpeak(word, 1), 200);
+  }
+}
+
+/* ============================================================
+   MCQ 选择题 — 渲染函数
+   ------------------------------------------------------------
+   两种选择题共用选项卡片布局，差异仅在题目区（单词 vs 释义）
+   和选项内容（中文释义 vs 英文单词）。
+   点击选项即判断，正确绿色/错误红色 + 音效，1.2s 后自动进入下一步。
+   长按选项显示反向信息（辅助学习，不影响答题结果）。
+   ============================================================ */
+
+/** MCQ 选项卡片 HTML 生成 */
+function mcqOptionsHtml(options) {
+  return options.map((opt, i) =>
+    `<button class="rv-mcq-option" data-mcq-idx="${i}" data-mcq-longpress="${i}" type="button">${esc(opt)}</button>`
+  ).join("");
+}
+
+/** 看词选义 · 单个中文选项的释义行（最多 2 条，带词典真实词性）。
+    两种情况严格区分，互不混淆：
+      情况一：该选项的英文单词命中考研词书
+        → 取「考研词书释义分级」结果中最具代表性的两条（绿色高频优先 → 黄色补足 → 其余补足），
+          逐条带词性 + 考研等级配色（绿/黄/灰）+ 「僻」角标。
+      情况二：该英文单词仅命中 ECDICT
+        → 保持 ECDICT 原有释义数据与原有纯文本显示方式，仅补上真实词性，
+          不套用考研绿色/黄色/灰色分级，不人为加色。
+    绝不虚构释义：不足两条就只显示已有条数。
+    @param {string} word 选项对应的英文单词
+    @param {number} max  最多显示几条（默认 2）
+    @returns {{pos:string, text:string, level?:string, obscure?:boolean}[]} */
+function w2mOptionSenseRows(word, max = 2) {
+  const w = String(word || "").trim().toLowerCase();
+  if (!w) return [];
+
+  // 情况一：考研词书命中 → 考研词书释义 + 考研释义颜色体系
+  if (window.KY && KY.kyTopSenses) {
+    const kyRows = KY.kyTopSenses(w, max);
+    if (kyRows && kyRows.length) return kyRows;
+  }
+
+  // 情况二：仅 ECDICT 兜底 → ECDICT 原有释义 + 原有显示方式（纯文本，无等级色）
+  const d = dictGet(w);
+  if (!d) return [];
+  const rows = [];
+  const seen = new Set();
+  for (const [pos, defs] of sensesOf(d)) {
+    for (const def of (defs || [])) {
+      const t = String(def || "").trim();
+      if (!t || seen.has(t)) continue; // 同词不同词性的重复释义只保留一次
+      seen.add(t);
+      rows.push({ pos: pos || "", text: t });
+      if (rows.length >= max) return rows;
+    }
+  }
+  return rows;
+}
+
+/** MCQ 选项卡片 HTML（看词选义 · 四个中文释义选项）。
+    每个选项内部显示其所属英文单词最具代表性的两条中文释义，分行排布、逐条带真实词性：
+      · 命中考研词书 → 按考研释义分级着色（绿 / 黄 / 灰）+ 「僻」角标；
+      · 仅 ECDICT 命中 → ECDICT 原有释义 + 原有纯文本显示，不套考研配色。
+    干扰项生成、四选项随机排列、正确答案位置、判定与音效逻辑均不变。 */
+function mcqOptionsHtmlGraded(options, optionWords) {
+  return options.map((opt, i) => {
+    const w = optionWords && optionWords[i];
+    const rows = w ? w2mOptionSenseRows(w, 2) : [];
+    const inner = rows.length
+      ? rows.map((r) => {
+          // 有 level 即来自考研词书分级 → 等级色 + 「僻」；否则保持 ECDICT 纯文本
+          const textHtml = r.level && window.KY
+            ? KY.kySpan({ text: r.text, level: r.level, obscure: !!r.obscure })
+            : esc(r.text);
+          const posHtml = r.pos ? `<span class="rv-mcq-pos">${esc(r.pos)}</span>` : "";
+          return `<span class="rv-mcq-line">${posHtml}<span class="rv-mcq-text">${textHtml}</span></span>`;
+        }).join("")
+      : esc(opt);
+    return `<button class="rv-mcq-option" data-mcq-idx="${i}" data-mcq-longpress="${i}" type="button">${inner}</button>`;
+  }).join("");
+}
+
+/** 已自动播报过的「看词选义」题目 key（word|w2m），防重渲染/重考重复自动播放。
+    仅内存态：新会话重建时清空（见 openReview）；手动点扬声器不依赖此标记 */
+let rvMcqAutoSpoken = {};
+
+/** Phase 1 子步骤: 单词→选释义 */
+function renderMcqWord2Meaning(body) {
+  const word = reviewSession.current;
+  const data = reviewSession.mcqData;
+  if (!data) { reviewNext(); return; }
+
+  rvMeaningProgress();
+
+  body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
+    <div class="rv-stage">
+      <div class="rv-word-row">
+        <h2 class="rv-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
+        <button class="rv-speaker" id="rv-mcq-speaker" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
+      </div>
+      <p class="rv-mcq-hint">选择正确的中文释义</p>
+    </div>
+    <div class="rv-mcq-options">
+      ${mcqOptionsHtmlGraded(data.options, data.optionWords)}
+    </div>
+  </div>`;
+
+  // 看词选义：单词出现后自动播报一次英语发音，完全复用回忆态实现
+  // （延迟 120ms、本地 TTS 优先 + 在线兜底；进入下一题时 reviewNext 已 ttsStop 立即中断上一条）。
+  // 同一题（word|w2m）仅自动播报一次：答错重考（retry 重渲染）不重播，
+  // 手动点扬声器仍可重复播放。
+  const mKey = word + "|w2m";
+  if (!rvMcqAutoSpoken[mKey]) {
+    rvMcqAutoSpoken[mKey] = true;
+    setTimeout(() => ttsSpeak(word, 1), 120);
+  }
+}
+
+/** Phase 1 子步骤: 释义→选单词 */
+function renderMcqMean2Word(body) {
+  const word = reviewSession.current;
+  const data = reviewSession.mcqData;
+  if (!data) { reviewNext(); return; }
+
+  rvMeaningProgress();
+
+  // 题目为目标单词完整释义：考研词书 → 逐条按统一等级着色（含「僻」角标）
+  const g = window.KY ? KY.kyLevel(word) : null;
+  let questionParts = [];
+  if (g) g.rows.forEach((r) => (questionParts = questionParts.concat(r.meanings)));
+  const questionHtml = questionParts.length ? KY.kyJoin(questionParts) : esc(data.question);
+
+  body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
+    <div class="rv-stage">
+      <p class="rv-mcq-question">${questionHtml}</p>
+      <p class="rv-mcq-hint">选择正确的英文单词</p>
+    </div>
+    <div class="rv-mcq-options">
+      ${mcqOptionsHtml(data.options)}
+    </div>
+  </div>`;
+}
+
+/** MCQ 答题处理：点击选项 → 判断 → 音效 + 视觉反馈 → 1.2s 后自动进入下一步 */
+function onMcqAnswer(clickedIdx) {
+  const data = reviewSession.mcqData;
+  const task = reviewSession.currentTask;
+  if (!data || !task) return;
+  const correct = clickedIdx === data.correctIdx;
+  const word = task.word;
+  const step = task.step; // "w2m" or "m2w"
+
+  // 记录 MCQ 结果到 wordResults
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word][step] = correct;
+
+  // MCQ 统计
+  if (step === "w2m") {
+    reviewSession.mcqStats.w2mTotal += 1;
+    if (correct) reviewSession.mcqStats.w2mCorrect += 1;
+  } else {
+    reviewSession.mcqStats.m2wTotal += 1;
+    if (correct) reviewSession.mcqStats.m2wCorrect += 1;
+  }
+
+  // 视觉反馈
+  const options = document.querySelectorAll(".rv-mcq-option");
+  options.forEach((opt, i) => {
+    opt.style.pointerEvents = "none";
+    if (i === data.correctIdx) {
+      opt.classList.add(correct ? "correct" : "reveal-correct");
+    }
+    if (i === clickedIdx && !correct) {
+      opt.classList.add("wrong");
+    }
+  });
+
+  // 音效
+  if (correct) {
+    playCorrectSound();
+  } else {
+    playErrorSound();
+  }
+
+  if (correct) {
+    // 正确：标记任务完成，尝试完成单词，1.2s 后前进
+    reviewSession.completed[word + "|" + step] = true;
+    tryCompleteWord(word);
+    reviewSession.detailCtx = { task: task, action: "advance" };
+    saveReviewSession();
+    setTimeout(() => reviewNext(), 1200);
+  } else {
+    // 错误：设置 detailCtx 为 retry，1.2s 后进入详情页
+    reviewSession.detailCtx = { task: task, action: "retry" };
+    saveReviewSession();
+    setTimeout(() => {
+      rvRender(() => renderDetail($("#review-body")));
+    }, 1200);
+  }
 }
 
 /** 阶段过渡页 */
 function renderTransition(body) {
   const s = reviewSession.stats;
   const total = reviewSession.initialCount || reviewSession.queue.length;
-  // 队末重排产生的重复判断（总判断次数 - 初始词数）单独标注，不影响词数基数
-  const extra = s.n > total ? `（共判断 ${s.n} 次）` : "";
 
   rvHideProgress();
 
   body.innerHTML = `<div class="rv-transition rv-screen">
     <div class="rv-transition-icon">✓</div>
     <h2 class="rv-transition-title">词义复习完成</h2>
-    <p class="rv-transition-sub">已完成 ${total} 个单词的词义复习${extra}<br>接下来进行拼写复习</p>
+    <p class="rv-transition-sub">已完成 ${total} 个单词的回忆与选择题考察<br>接下来进行拼写复习</p>
     <div class="rv-transition-stats">
       <div class="rv-transition-stat rv-transition-stat--known">
         <b>${s.known}</b><span>认识</span>
@@ -977,6 +1632,7 @@ function renderTransition(body) {
         <b>${s.unknown}</b><span>不认识</span>
       </div>
     </div>
+    ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal > 0 ? `<p class="rv-transition-mcq">选择题正确率：${reviewSession.mcqStats.w2mCorrect + reviewSession.mcqStats.m2wCorrect} / ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal}</p>` : ""}
     <button class="rv-btn-go" id="rv-go-spell" type="button">开始拼写复习</button>
   </div>`;
 }
@@ -986,7 +1642,11 @@ function renderSpell(body) {
   const word = reviewSession.current;
   const total = reviewSession.spellQueue.length;
   const sp = reviewSession.spell;
-  const defHint = (senseLines(word)[0] || briefOf(word)) || "根据释义拼写单词";
+  // 拼写提示：考研词书 → 首行释义逐条按统一等级着色；其他来源 → 原有纯文本
+  const g = window.KY ? KY.kyLevel(word) : null;
+  const defHintHtml = g && g.rows.length
+    ? `${g.rows[0].pos ? esc(g.rows[0].pos) + " " : ""}${KY.kyJoin(g.rows[0].meanings)}`
+    : esc((senseLines(word)[0] || briefOf(word)) || "根据释义拼写单词");
   
   rvSetProgress(reviewSession.spellIdx + 1, total);
   
@@ -1062,14 +1722,13 @@ function renderDone(body) {
   const s = reviewSession.stats;
   const sp = reviewSession.spellStats;
   const total = reviewSession.initialCount || reviewSession.queue.length;
-  const extra = s.n > total ? ` · 共判断 ${s.n} 次` : "";
 
   rvHideProgress();
 
   body.innerHTML = `<div class="rv-done rv-screen">
     <div class="rv-done-check">✓</div>
     <h2 class="rv-done-title">今日复习完成</h2>
-    <p class="rv-done-sub">共复习 ${total} 个单词${extra}</p>
+    <p class="rv-done-sub">共复习 ${total} 个单词</p>
     
     <div class="rv-done-stats-block">
       <p class="rv-done-section-title">词义复习</p>
@@ -1085,6 +1744,18 @@ function renderDone(body) {
         </div>
       </div>
     </div>
+    
+    ${reviewSession.mcqStats.w2mTotal + reviewSession.mcqStats.m2wTotal > 0 ? `<div class="rv-done-stats-block">
+      <p class="rv-done-section-title">选择题</p>
+      <div class="rv-done-stats">
+        <div class="rv-done-stat rv-done-stat--correct">
+          <b>${reviewSession.mcqStats.w2mCorrect + reviewSession.mcqStats.m2wCorrect}</b><span>正确</span>
+        </div>
+        <div class="rv-done-stat rv-done-stat--wrong">
+          <b>${(reviewSession.mcqStats.w2mTotal - reviewSession.mcqStats.w2mCorrect) + (reviewSession.mcqStats.m2wTotal - reviewSession.mcqStats.m2wCorrect)}</b><span>错误</span>
+        </div>
+      </div>
+    </div>` : ""}
     
     <div class="rv-done-stats-block">
       <p class="rv-done-section-title">拼写复习</p>
@@ -1103,71 +1774,155 @@ function renderDone(body) {
   </div>`;
 }
 
-/** 用户点击判断按钮。
-    当天首次判断 → 调用长期间隔算法（answerReview），锁定该词今天的间隔基准；
-    当天重复出现（队末重排后再考）→ 绝不再触碰长期算法，只决定是否继续排队 */
+/** 用户点击判断按钮（认识/模糊/不认识）。
+    任务池模式：记录 recall 结果 → 标记 recall 任务完成 → 进入详情页。
+    answerReview 延迟到单词的三种任务全部完成后调用。 */
 function onReviewAnswer(result) {
-  ttsStop(); // 用户已作答：立即停掉回忆页自动发音（不允许播完）
-  // 学习统计：完成一次生词复习 + 结算本题有效时长（答题间隔，封顶 3 分钟）
+  ttsStop();
   if (window.VH_STATS) VH_STATS.add({ vocab: 1, sec: VH_STATS.elapsed() });
   const word = reviewSession.current;
+  const task = reviewSession.currentTask;
   const firstOfDay = !reviewSession.answeredToday[word];
 
   if (firstOfDay) {
-    // 首次判断：写入长期 Review 状态（当天间隔算法基准，后续重复判断不可更改）
     const st = reviewStore.words[word];
-    // 记录快照用于「记错了」回滚
     reviewSession.snapshot = st ? JSON.parse(JSON.stringify(st)) : null;
-    answerReview(word, result);
+    // 注意：answerReview 不在这里调用，延迟到单词三种任务全部完成时
     reviewSession.answeredToday[word] = 1;
   } else {
-    // 重复判断：长期状态已锁定，不回滚、不写入
     reviewSession.snapshot = null;
   }
 
-  // 更新会话状态（重复判断同样计入答题统计：当天复习次数可超过单词数）
+  // 记录 recall 结果
   reviewSession.lastResult = result;
-  reviewSession.step = "detail";
-  reviewSession.stats.n += 1;
-  reviewSession.stats[result] += 1;
-  saveReviewSession();
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].recall = result;
 
+  // 标记 recall 任务完成
+  reviewSession.completed[word + "|recall"] = true;
+
+  // 设置详情页上下文：返回后完成当前任务并前进
+  reviewSession.detailCtx = { task: task, action: "complete" };
+
+  saveReviewSession();
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 记错了：首次判断 → 回滚并按不认识写入长期算法；重复判断 → 仅修正当天判断
-    （长期基准已在首次判断锁定，「记错了」只把词放回队尾继续考） */
+/** 记错了：回滚 SR 状态 → 按不认识处理。
+    任务池模式：将 recall 结果改为 unknown，并将该单词的 w2m/m2w 任务全部标记完成（因为结果已是 unknown）。 */
 function reviewCorrection() {
   const word = reviewSession.current;
   if (!reviewSession.snapshot && !reviewSession.answeredToday[word]) return;
 
   if (reviewSession.snapshot) {
-    // 首次判断的修正：回滚 → 按「不认识」重算（仍属当天首次判断的最终结果）
     reviewStore.words[word] = reviewSession.snapshot;
     reviewSession.snapshot = null;
-    answerReview(word, "unknown");
+    // 不调用 answerReview，延迟到 tryCompleteWord
   }
 
-  const prev = reviewSession.lastResult;
-  if (prev && reviewSession.stats[prev] > 0) reviewSession.stats[prev] -= 1;
-  reviewSession.stats.unknown += 1;
   reviewSession.lastResult = "unknown";
-  saveReviewSession();
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].recall = "unknown";
 
+  // “记错了” = 不认识 → 三种任务全部完成（w2m/m2w 无需再考）
+  reviewSession.completed[word + "|recall"] = true;
+  reviewSession.completed[word + "|w2m"] = true;
+  reviewSession.completed[word + "|m2w"] = true;
+  if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
+  reviewSession.wordResults[word].w2m = true;
+  reviewSession.wordResults[word].m2w = true;
+
+  saveReviewSession();
   rvRender(() => renderDetail($("#review-body")));
 }
 
-/** 进入下一个词或过渡页。
-    队末重排：本条被判「模糊/不认识」→ 放回当天队列末尾再次出现，
-    直到最终「认识」通过；队列彻底走完（idx 追上含重排的长度）才进入过渡页 */
+/** 计算组合结果：基于 wordResults 中已记录的三种结果 */
+function computeCombinedResult(word) {
+  const wr = reviewSession.wordResults[word] || {};
+  const recall = wr.recall || "known";
+  const w2m = wr.w2m; // true/false/undefined
+  const m2w = wr.m2w; // true/false/undefined
+  const mcqAnyWrong = w2m === false || m2w === false;
+  if (mcqAnyWrong || recall === "unknown") return "unknown";
+  if (recall === "fuzzy") return "fuzzy";
+  return "known";
+}
+
+/** 尝试完成一个单词：三种任务全部完成时调用 answerReview + 更新统计 */
+function tryCompleteWord(word) {
+  if (reviewSession.wordsDone[word]) return;
+  const r = reviewSession.wordResults[word] || {};
+  const recallDone = reviewSession.completed[word + "|recall"];
+  const w2mDone = reviewSession.completed[word + "|w2m"];
+  const m2wDone = reviewSession.completed[word + "|m2w"];
+  if (!recallDone || !w2mDone || !m2wDone) return;
+
+  // 三种任务全部完成 → 计算组合结果
+  reviewSession.wordsDone[word] = true;
+  const combined = computeCombinedResult(word);
+
+  // 调用 answerReview（当天首次判断）
+  const firstOfDay = reviewSession.answeredToday[word];
+  if (firstOfDay) {
+    answerReview(word, combined);
+  }
+
+  // 更新统计
+  reviewSession.stats.n += 1;
+  reviewSession.stats[combined] += 1;
+}
+
+/** 任务池模式下的“下一个”：根据 detailCtx 决定行为 */
 function reviewNext() {
   ttsStop();
-  playNextSound(); // 下一题提示音（「滴」，与 TTS 通道互不影响）
-  if (reviewSession.lastResult === "fuzzy" || reviewSession.lastResult === "unknown") {
-    reviewSession.queue.push(reviewSession.current);
+
+  const ctx = reviewSession.detailCtx;
+
+  // MCQ（看词选义 / 义选词）的结果音效已在答题瞬间播放一次（对→答对音，错→错误音）。
+  // 答对自动前进、答错详情页点「继续」都不属于新的答题结果，
+  // 此处不再播放前进音，保证「一次有效答题只触发一次提示音」；
+  // 看词回忆（action="complete"，详情页点「下一个」）保持原有播放行为不变。
+  const fromMcq = ctx && ctx.task && (ctx.task.step === "w2m" || ctx.task.step === "m2w");
+  if (!fromMcq) playNextSound();
+
+  if (ctx && ctx.action === "retry") {
+    // MCQ 答错后查看完详情 → 仅将当前这一态重入混合队列（随机插到未消费段的合法位置，
+    // 避开与同一单词相邻；无合法位置时兜底追加队尾），其余已完成的态不重考
+    const retryTask = { word: ctx.task.word, step: ctx.task.step };
+    const q = reviewSession.queue;
+    const slots = [];
+    for (let p = reviewSession.idx + 1; p <= q.length; p++) {
+      const beforeSame = p > 0 && q[p - 1] && q[p - 1].word === retryTask.word;
+      const afterSame = p < q.length && q[p].word === retryTask.word;
+      if (!beforeSame && !afterSame) slots.push(p);
+    }
+    if (slots.length) {
+      q.splice(slots[Math.floor(Math.random() * slots.length)], 0, retryTask);
+    } else {
+      q.push(retryTask);
+    }
+    reviewSession.idx += 1;
+    reviewSession.detailCtx = null;
+    reviewSession.mcqData = null;
+    saveReviewSession();
+    renderReviewByPhase();
+    return;
   }
+
+  // 默认：完成任务并前进
+  if (ctx && ctx.task) {
+    // 如果这是 recall 任务且还没标记完成（通过“记错了”路径）
+    const key = ctx.task.word + "|" + ctx.task.step;
+    if (!reviewSession.completed[key]) {
+      reviewSession.completed[key] = true;
+    }
+    // 尝试完成该单词
+    tryCompleteWord(ctx.task.word);
+  }
+
   reviewSession.idx += 1;
-  reviewSession.step = "answer";
+  reviewSession.detailCtx = null;
+  reviewSession.mcqData = null;
   reviewSession.lastResult = null;
   reviewSession.snapshot = null;
   saveReviewSession();
@@ -1177,7 +1932,9 @@ function reviewNext() {
 /** 进入拼写阶段（拼写队列基于当天词集合去重后随机打乱：
     Phase 1 队末重排会在 queue 中留下重复项，拼写每词只考一次起步） */
 function goToSpellPhase() {
-  reviewSession.spellQueue = shuffleArray(Array.from(new Set(reviewSession.queue)));
+  // 从任务池提取唯一单词列表
+  const uniqueWords = [...new Set(reviewSession.queue.map(t => t.word))];
+  reviewSession.spellQueue = shuffleArray(uniqueWords);
   reviewSession.spellIdx = 0;
   reviewSession.phase = "spell";
   reviewSession.spell = { submitted: false, correct: false, input: "" };
@@ -1335,7 +2092,31 @@ function renderTasks() {
     </li>`;
   }).join("");
 
+  // 任务面板顶部进度环：今日完成度一目了然（与打卡口径一致）
+  const doneCount = todayDoneCount();
+  // 环体偏小、进度弧偏粗：整体更精致不显臃肿（半径 21 / 弧宽 6.5）
+  const RING_R = 21;
+  const RING_C = +(2 * Math.PI * RING_R).toFixed(2);
+  const ringPct = ts.length ? Math.min(1, doneCount / ts.length) : 0;
+  const ringOffset = +(RING_C * (1 - ringPct)).toFixed(2);
+  const ringHTML = `
+    <section class="task-progress-card">
+      <svg class="task-ring" viewBox="0 0 60 60" aria-hidden="true">
+        <circle class="task-ring-track" cx="30" cy="30" r="${RING_R}"/>
+        <circle class="task-ring-bar" cx="30" cy="30" r="${RING_R}" stroke-dasharray="${RING_C}" stroke-dashoffset="${ringOffset}"/>
+        <circle class="task-ring-core" cx="30" cy="30" r="16"/>
+        <text class="task-ring-text" x="30" y="33.6" text-anchor="middle">${ts.length ? `${doneCount}/${ts.length}` : "—"}</text>
+      </svg>
+      <div class="task-progress-main">
+        <p class="task-progress-title">今日任务</p>
+        <p class="task-progress-sub">${!ts.length
+          ? "今天还没有任务 · 点击添加"
+          : doneCount === ts.length ? "全部完成 · 太棒了 ✓" : `${doneCount} / ${ts.length} 已完成`}</p>
+      </div>
+    </section>`;
+
   body.innerHTML = `
+    ${ringHTML}
     <section class="task-section">
       <div class="task-section-head">
         <p class="section-eyebrow">今日任务</p>
@@ -1358,7 +2139,7 @@ function renderTasks() {
             const dueTxt = g.due ? `截止 ${fmtDayCN(g.due)}` : "无期限";
             const remain = g.due ? daysUntil(g.due) : null;
             return `<li class="goal-row" style="animation-delay:${i * 30}ms">
-              <span class="goal-dot"></span>
+              <span class="goal-icon">${GOAL_SVG}</span>
               <span class="row-main">
                 <p class="goal-name">${esc(g.name)}</p>
                 <p class="task-sub">${dueTxt}${remain !== null ? ` · 还剩 ${Math.max(0, remain)} 天` : ""}${p.total ? ` · 今日 ${p.done}/${p.total}` : ""}</p>
@@ -1380,7 +2161,7 @@ function renderTasks() {
               ? `达成目标「${goalOf(r.goalId) ? goalOf(r.goalId).name : "已删除"}」后`
               : "完成今天全部任务后";
             return `<li class="reward-row" style="animation-delay:${i * 30}ms">
-              <span class="reward-icon">🎯</span>
+              <span class="reward-icon">${REWARD_SVG}</span>
               <span class="row-main">
                 <p class="reward-content">${esc(r.content)}</p>
                 <p class="task-sub">${esc(cond)}触发</p>
@@ -1396,6 +2177,21 @@ function renderTasks() {
     </div>
 
     <button class="primary-btn task-new-btn" id="task-new-btn" type="button">＋ 新建任务 / 目标 / 奖励</button>`;
+
+  // 进度环转动动画：勾选/取消任务后圆弧从旧进度带轻微回弹地转到新进度。
+  // 圆环随每次重绘重建，故先无动画拨回旧值、再切到新值触发 CSS transition；
+  // 首次渲染（无旧值）直接呈现终态，不闪动画。
+  const ringBar = body.querySelector(".task-ring-bar");
+  if (ringBar) {
+    if (prevRingOffset !== null && prevRingOffset !== ringOffset) {
+      ringBar.style.transition = "none";
+      ringBar.style.strokeDashoffset = prevRingOffset;
+      void ringBar.getBoundingClientRect(); // 强制回流，确保旧值生效后再恢复过渡
+      ringBar.style.transition = "";
+    }
+    ringBar.style.strokeDashoffset = ringOffset;
+    prevRingOffset = ringOffset;
+  }
 }
 
 /** 日期字符串 → "10月1日" */
@@ -1975,6 +2771,8 @@ function pomoClose() {
 const TASKS_KEY = "vc-tasks";
 let taskStore = { daily: [], onetime: [], goals: [], rewards: [], checkins: {} };
 let taskFormTab = "task"; // 创建面板当前表单：task | goal | reward
+// 进度环上一次的 dashoffset：勾选/取消任务重绘时让圆弧从旧进度平滑转到新进度（回弹缓动）
+let prevRingOffset = null;
 
 function loadTasks() {
   try {
@@ -1985,6 +2783,7 @@ function loadTasks() {
 }
 function saveTasks() {
   try { localStorage.setItem(TASKS_KEY, JSON.stringify(taskStore)); } catch (_) {}
+  pushReminderState(); // 通知提醒：任务/打卡变化 → 同步快照给原生（到点判断是否已完成）
 }
 function taskUid(prefix) {
   return prefix + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -2172,14 +2971,33 @@ function bumpStat(el, val) {
   el.classList.add("bump");
 }
 
+// 工具格四卡强制等高：grid 隐式行各自按内容定高，跨行不等高时统一为最高卡高度，保证四格完全等大
+function equalizeToolGrid() {
+  const grid = $("#tool-grid");
+  if (!grid) return;
+  const cards = grid.querySelectorAll(".review-entry");
+  cards.forEach((c) => (c.style.height = "")); // 先释放再测量，避免旧值干扰真实高度
+  let max = 0;
+  cards.forEach((c) => { max = Math.max(max, c.offsetHeight); });
+  if (max > 0) cards.forEach((c) => (c.style.height = `${max}px`));
+}
+
 function renderHome() {
   const list = todayWords();
   bumpStat($("#stat-new"), statNew());
   bumpStat($("#stat-queries"), statQueries());
+  // 专注分钟：今日番茄累计（整数直显，小数保留一位）
+  const focusMin = pomoStatsToday().minutes;
+  bumpStat($("#stat-focus"), Number.isInteger(focusMin) ? focusMin : focusMin.toFixed(1));
+  // 连续天数胶囊：始终展示（对齐设计参考图，无连续记录时显示 0）
+  $("#stat-streak-days").textContent = currentStreak();
+  const histSub = $("#history-entry-sub");
+  if (histSub) histSub.textContent = `共 ${statQueries()} 条 · 永久`;
   renderReviewEntry();
   renderPomoEntry();
   renderTasksEntry();
   renderHomeFeedback();
+  equalizeToolGrid();
   const el = $("#home-word-list");
   el.innerHTML = list.length
     ? list.slice(0, 4).map((w, i) => `
@@ -2190,7 +3008,12 @@ function renderHome() {
           </span>
           <span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
         </button></li>`).join("")
-    : `<li class="empty-state">今天还没有遇到生词<br><span>搜索单词开始记录</span></li>`;
+    : `<li class="empty-state empty-hero">
+        <span class="empty-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M6 3.5h8.5L19 8v12.5H6z"/><path d="M14.5 3.5V8H19"/><path d="M9 12.5h6M9 16h4"/>
+        </svg></span>
+        今天还没有遇到生词<br><span>搜索单词，开始记录</span>
+      </li>`;
 }
 
 /* 生词页视图：today = 今日生词（每日 04:00 重置）；starred = 历史生词（生词本，永久） */
@@ -2280,8 +3103,11 @@ function renderHistory() {
 }
 
 function renderGreeting() {
-  const h = new Date().getHours();
-  $("#greeting").textContent = h < 12 ? "早上好" : h < 18 ? "下午好" : "晚上好";
+  const now = new Date();
+  const h = now.getHours();
+  const part = h < 5 ? "夜深了" : h < 12 ? "早上好" : h < 18 ? "下午好" : "晚上好";
+  const week = ["日", "一", "二", "三", "四", "五", "六"][now.getDay()];
+  $("#greeting").textContent = `${part} · ${now.getMonth() + 1}月${now.getDate()}日 · 周${week}`;
 }
 
 /* ---------- ECDICT 分片后台预热 ----------
@@ -2321,6 +3147,7 @@ function renderAll() {
   renderHistory();
   renderExportMeta();
   warmDisplayedEcdict();
+  pushReminderState(); // 通知提醒：任何数据渲染路径都顺带把最新状态同步给原生
 }
 
 /* ---------- 页面切换 ---------- */
@@ -2328,6 +3155,9 @@ function renderAll() {
 function switchTab(name) {
   // 切换页面时清理全局浮层（词典搜索面板），避免残留叠加到其他页面
   if (typeof closeSheet === "function" && sheetOpen) closeSheet();
+  // 任务/导出/通知子页无底部导航（对齐设计参考图，同 Review 沉浸模式）
+  document.body.classList.toggle("subpage-active",
+    name === "tasks" || name === "export" || name === "notify");
   $$(".page").forEach((p) => p.classList.remove("active"));
   const page = $(`#page-${name}`);
   void page.offsetWidth;
@@ -2347,7 +3177,9 @@ $$("[data-back='home']").forEach((b) => b.addEventListener("click", () => {
 }));
 $$("[data-back='settings']").forEach((b) => b.addEventListener("click", () => switchTab("settings")));
 $("#view-all").addEventListener("click", () => switchTab("words"));
+$("#history-entry").addEventListener("click", () => { rolloverIfNeeded(); renderAll(); switchTab("history"); });
 $("#export-entry").addEventListener("click", () => switchTab("export"));
+$("#notify-entry").addEventListener("click", () => { renderNotify(); switchTab("notify"); });
 
 /* Review 复习：入口卡片 + 页面内交互（两阶段沉浸式设计）
    Phase 1: 词义复习（主动回忆）→ 过渡页 → Phase 2: 拼写复习（随机队列）→ 完成
@@ -2360,25 +3192,38 @@ $("#review-body").addEventListener("click", (e) => {
   const ready = now - reviewActionAt >= 300;
   const fire = (ok, fn) => { if (ok) { reviewActionAt = now; fn(); } };
   
-  // Phase 1: 判断按钮（认识/模糊/不认识）
+  // Phase 1: 判断按钮（认识/模糊/不认识）—— 仅 recall 任务时可用
   const ans = e.target.closest(".rv-btn[data-result]");
   if (ans && reviewSession.phase === "meaning") {
-    fire(ready && reviewSession.step === "answer", () => onReviewAnswer(ans.dataset.result));
+    const ct = reviewSession.currentTask;
+    fire(ready && ct && ct.step === "recall", () => onReviewAnswer(ans.dataset.result));
     return;
   }
   
-  // Phase 1: 记错了
+  // Phase 1: 记错了 —— 仅 recall 详情页可用
   if (e.target.closest("#review-wrong")) {
-    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewCorrection);
+    const ctx = reviewSession.detailCtx;
+    fire(ready && ctx && ctx.task && ctx.task.step === "recall", reviewCorrection);
     return;
   }
   
-  // Phase 1: 下一个（释义确认后）
+  // Phase 1: 下一个/继续 —— 详情页可用
   if (e.target.closest("#review-next")) {
-    fire(ready && reviewSession.phase === "meaning" && reviewSession.step === "detail", reviewNext);
+    fire(ready && reviewSession.detailCtx, reviewNext);
     return;
   }
-  
+
+  // MCQ: 点击选项答题（长按松开后的 click 不触发答题）
+  const mcqOpt = e.target.closest(".rv-mcq-option[data-mcq-idx]");
+  if (mcqOpt) {
+    const ct = reviewSession.currentTask;
+    if (ct && (ct.step === "w2m" || ct.step === "m2w")) {
+      if (mcqLongPressed) { mcqLongPressed = false; return; }
+      fire(ready, () => onMcqAnswer(parseInt(mcqOpt.getAttribute("data-mcq-idx"), 10)));
+      return;
+    }
+  }
+
   // 过渡页：开始拼写复习
   if (e.target.closest("#rv-go-spell")) {
     fire(ready && reviewSession.phase === "transition", goToSpellPhase);
@@ -2414,9 +3259,117 @@ $("#review-body").addEventListener("click", (e) => {
   }
 });
 
+/* ---------- MCQ 长按查看反向信息（辅助学习，不影响答题结果） ---------- */
+let mcqLongPressTimer = null;
+let mcqLongPressOverlay = null;
+let mcqLongPressed = false; // 标记本次长按已触发，阻止后续 click 答题
+
+function removeMcqOverlay() {
+  if (mcqLongPressTimer) { clearTimeout(mcqLongPressTimer); mcqLongPressTimer = null; }
+  if (mcqLongPressOverlay) { mcqLongPressOverlay.remove(); mcqLongPressOverlay = null; }
+}
+
+/** 显示长按浮层：完整词典释义卡片（复用搜索结果卡片样式）
+    不增加查询次数/记录/生词本，仅辅助查看。用户点击 +1 才执行加入生词本。 */
+function showMcqOverlay(word) {
+  removeMcqOverlay();
+  const d = dictGet(word);
+  if (!d) return;
+  const m = wordMeta(word);
+  const el = document.createElement("div");
+  el.className = "rv-mcq-longpress";
+  el.innerHTML = `<div class="rv-mcq-longpress-card">
+    <div class="result-detail">
+      <p class="detail-word">
+        <span class="word">${esc(word)}</span>
+        <span class="detail-word-actions">
+          <span class="speaker-btn" data-speak="${esc(word)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span>
+          <button class="add-one-btn" data-addone="${esc(word)}" type="button">+1</button>
+        </span>
+      </p>
+      <p class="detail-phonetic">${esc(phoneticOf(word))}</p>
+      ${detailMeaningsHtml(word)}
+      <div class="detail-meta">
+        <span class="meta-chip"><span class="chip-label">今日</span>${m.today} 次</span>
+        <span class="meta-chip"><span class="chip-label">累计</span>${m.total} 次</span>
+      </div>
+    </div>
+  </div>`;
+  // 点击遮罩关闭 / 鼠标松开关闭 / 触摸结束关闭
+  el.addEventListener("click", (e) => {
+    // 点击卡片内部（+1/扬声器）不关闭，点击遮罩背景关闭
+    if (e.target === el) removeMcqOverlay();
+  });
+  el.addEventListener("mouseup", (e) => {
+    // 鼠标在遮罩上松开时关闭（解决长按后 overlay 截获 mouseup 的问题）
+    if (e.target === el) removeMcqOverlay();
+  });
+  el.addEventListener("touchend", () => removeMcqOverlay());
+  document.body.appendChild(el);
+  mcqLongPressOverlay = el;
+}
+
+/** 获取选项对应的单词（用于词典查询） */
+function getMcqOptionWord(optionIdx) {
+  const data = reviewSession.mcqData;
+  if (!data) return null;
+
+  if (data.type === "w2m") {
+    // 单词→选释义模式：直接从 optionWords 查找源单词
+    if (data.optionWords && data.optionWords[optionIdx]) {
+      return data.optionWords[optionIdx];
+    }
+    // 兆底：反查
+    const optionText = data.options[optionIdx];
+    if (!optionText) return null;
+    const results = reverseSearch(stripPos(optionText), 1);
+    return results.length > 0 ? results[0] : null;
+  }
+
+  if (data.type === "m2w") {
+    // 释义→选单词模式：选项就是单词
+    return data.options[optionIdx] || null;
+  }
+
+  return null;
+}
+
+// 长按触发逻辑（触摸 + 鼠标通用）
+function mcqLongPressStart(e) {
+  const opt = e.target.closest(".rv-mcq-option[data-mcq-longpress]");
+  if (!opt) return;
+  const ct = reviewSession.currentTask;
+  if (!ct || (ct.step !== "w2m" && ct.step !== "m2w")) return;
+  const idx = parseInt(opt.getAttribute("data-mcq-longpress"), 10);
+  mcqLongPressed = false;
+  mcqLongPressTimer = setTimeout(() => {
+    mcqLongPressed = true;
+    const word = getMcqOptionWord(idx);
+    if (word) {
+      showMcqOverlay(word);
+      try { navigator.vibrate && navigator.vibrate(30); } catch (_) {}
+    }
+  }, 500);
+}
+
+// 触摸事件（移动端）
+$("#review-body").addEventListener("touchstart", mcqLongPressStart, { passive: true });
+$("#review-body").addEventListener("touchend", removeMcqOverlay, { passive: true });
+$("#review-body").addEventListener("touchmove", removeMcqOverlay, { passive: true });
+
+// 鼠标事件（桌面端兑底）
+$("#review-body").addEventListener("mousedown", (e) => {
+  const opt = e.target.closest(".rv-mcq-option[data-mcq-longpress]");
+  if (opt) e.preventDefault(); // 防止长按时触发文本选择
+  mcqLongPressStart(e);
+});
+$("#review-body").addEventListener("mouseup", removeMcqOverlay);
+$("#review-body").addEventListener("mouseleave", removeMcqOverlay);
+
 /** 退出 Review 沉浸模式 */
 function exitReview() {
   document.body.classList.remove("review-active");
+  removeMcqOverlay(); // 退出时清理长按浮层
 }
 
 /** 清空复习队列确认层 */
@@ -2751,7 +3704,7 @@ function renderSheetDetailWith(w, d) {
       </span>
     </p>
     <p class="detail-phonetic">${esc(phoneticOf(w))}</p>
-    ${senseLines(w).map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("")}
+    ${detailMeaningsHtml(w)}
     <div class="detail-meta">
       <span class="meta-chip"><span class="chip-label">今日</span>${m.today} 次</span>
       <span class="meta-chip"><span class="chip-label">累计</span>${m.total} 次</span>
@@ -2881,7 +3834,7 @@ function applyTheme(mode, persist = true) {
   const dark =
     mode === "dark" ||
     (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
-  metaTheme.content = dark ? "#131315" : "#F7F7F8";
+  metaTheme.content = dark ? "#0B0E14" : "#F7F8FA";
   if (persist) localStorage.setItem("vc-theme", mode);
   $$("#appearance-seg .seg-btn").forEach((b) =>
     b.setAttribute("aria-checked", String(b.dataset.value === mode))
@@ -2933,6 +3886,152 @@ function initOverlay() {
   }
 }
 
+/* ---------- 通知提醒（Android 原生 AlarmManager + 系统通知，仅 APK 内可用） ----------
+   前端只负责两件事：
+     ① 用户设置（开关 / 提醒时间）→ AndroidBridge.setReminder(on, hour, minute)
+     ② 任务与复习状态快照        → AndroidBridge.updateReminderState(json)
+   到点检查、发通知、App 关闭态触发、重启后恢复计划一律由原生完成，不依赖 WebView 存活。
+   快照口径与前端 reviewQueue() / todayAllDone() 严格一致（见 reminderSnapshot）。 */
+
+const NOTIFY_KEY = "vc-notify";
+const notifyCfg = loadNotify();
+let notifyPushTimer = null;
+
+function loadNotify() {
+  try {
+    const s = JSON.parse(localStorage.getItem(NOTIFY_KEY) || "null");
+    if (s && typeof s === "object") {
+      const h = Number(s.hour), m = Number(s.minute);
+      return {
+        on: !!s.on,
+        hour: Number.isFinite(h) ? Math.min(23, Math.max(0, Math.round(h))) : 21,
+        minute: Number.isFinite(m) ? Math.min(59, Math.max(0, Math.round(m))) : 0,
+      };
+    }
+  } catch (_) { /* 数据损坏 → 回默认 */ }
+  return { on: false, hour: 21, minute: 0 };
+}
+
+function saveNotify() {
+  try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(notifyCfg)); } catch (_) {}
+}
+
+function notifyTimeText() {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(notifyCfg.hour)}:${p(notifyCfg.minute)}`;
+}
+
+/** 通知提醒状态快照（交原生持久化，到点时由原生现算，不使用任何固定假状态）：
+      review：生词本内全部词条的 nextAt 时间戳（升序）→ 原生按「nextAt <= 当前时刻」计数，
+              与前端 reviewQueue() 同口径；存时间戳而非数量，快照多旧都不会失真
+      tasks / done：今日任务定义 + 今日已打卡 id → 原生可对任意业务日重新投影（tasksOfDay /
+               dailyVisibleOn / isTaskDone 同口径），App 几天没打开也能算出当天该不该提醒
+    两个状态彼此独立，原生分别判断、分别发通知。 */
+function reminderSnapshot() {
+  const day = vocabDay();
+  const tasks = todayTasks().map((t) => (t.kind === "daily"
+    ? {
+        id: t.id, k: "d",
+        s: t.startAt || bizDayOf(t.createdAt), e: t.endAt || null,
+        x: t.deletedAt ? (t.deleteDay || bizDayOf(t.deletedAt)) : null,
+        xk: t.keepDeletedDay ? 1 : 0,
+      }
+    : { id: t.id, k: "o", d: t.date }));
+  const review = [];
+  for (const w of Object.keys(reviewStore.words)) {
+    const e = reviewStore.words[w];
+    if (e && e.nextAt > 0 && isStarred(w)) review.push(e.nextAt);
+  }
+  review.sort((a, b) => a - b);
+  if (review.length > 5000) review.length = 5000; // 极端数据量保护（升序，保留最早到期的一批）
+  return JSON.stringify({
+    v: 1, day, ts: Date.now(),
+    tasks, done: taskStore.checkins[day] || [], review,
+  });
+}
+
+/** 推送快照给原生；300ms 合并窗口（复习答题、批量迁移等高频写入只推最后一次） */
+function pushReminderState() {
+  if (!hasBridge()) return;
+  clearTimeout(notifyPushTimer);
+  notifyPushTimer = setTimeout(() => {
+    try { window.AndroidBridge.updateReminderState(reminderSnapshot()); } catch (_) {}
+  }, 300);
+}
+
+/** 同步通知相关 UI：设置页入口副标题 + 二级页开关 / 时间 / 状态 */
+function applyNotifyUI() {
+  const on = notifyCfg.on;
+  const sw = $("#notify-switch");
+  if (sw) sw.setAttribute("aria-checked", String(on));
+  const time = $("#notify-time");
+  if (time) time.value = notifyTimeText();
+  const entry = $("#notify-value");
+  if (entry) entry.textContent = on ? notifyTimeText() : "关";
+  const status = $("#notify-status");
+  if (status) status.textContent = on ? `每日 ${notifyTimeText()}` : "未开启";
+}
+
+/** 设置落盘 + 通知原生：关闭 → 取消已设定的提醒；改时间 → 取消旧计划并按新时间重排 */
+function commitNotify() {
+  saveNotify();
+  applyNotifyUI();
+  if (!hasBridge()) return;
+  window.AndroidBridge.setReminder(notifyCfg.on, notifyCfg.hour, notifyCfg.minute);
+}
+
+function renderNotify() { applyNotifyUI(); }
+
+$("#notify-switch").addEventListener("click", () => {
+  notifyCfg.on = !notifyCfg.on;
+  // 开启且未获通知权限时，原生先申请权限，结果经 window.__onNotifyPermission 回写
+  commitNotify();
+});
+$("#notify-time").addEventListener("change", (e) => {
+  const seg = String(e.target.value || "").split(":");
+  const h = Number(seg[0]), m = Number(seg[1]);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) { applyNotifyUI(); return; }
+  notifyCfg.hour = Math.min(23, Math.max(0, h));
+  notifyCfg.minute = Math.min(59, Math.max(0, m));
+  commitNotify();
+  showToast(`提醒时间已设为 ${notifyTimeText()}`);
+});
+
+/** 原生申请通知权限的结果回调：拒绝则把开关复位，避免出现「显示已开但不会响」 */
+window.__onNotifyPermission = function (granted) {
+  notifyCfg.on = !!granted;
+  commitNotify();
+  showToast(granted ? "通知提醒已开启" : "未获得通知权限");
+};
+
+/** 回到前台 / 从系统通知设置页返回：权限被关掉 → 复位显示；否则校正一次计划 */
+function syncNotifyPermission() {
+  if (!hasBridge() || !notifyCfg.on) return;
+  if (!window.AndroidBridge.hasNotificationPermission()) {
+    notifyCfg.on = false;
+    saveNotify();
+    applyNotifyUI();
+    return;
+  }
+  window.AndroidBridge.syncReminder();
+}
+
+function initNotify() {
+  if (!hasBridge()) return; // Web 预览隐藏该项
+  const item = $("#notify-entry"), sep = $("#notify-sep");
+  if (item) item.hidden = false;
+  if (sep) sep.hidden = false;
+  applyNotifyUI();
+  // 进程启动校正一次计划：兜住开机广播被 ROM 拦截、应用更新、用户改系统时间等场景
+  window.AndroidBridge.syncReminder();
+}
+
+/** 通知点击落地：由原生在页面就绪后调用。target = 'review'（单词 Review）| 'tasks'（学习任务） */
+window.__vhGo = function (target) {
+  if (target === "review") { openReview(); return; }
+  openTasks();
+};
+
 /* ---------- 导出（内容：今日/历史生词 + 词典释义 + 查询次数） ---------- */
 
 function bindSegmented(sel, onChange) {
@@ -2948,7 +4047,7 @@ function bindSegmented(sel, onChange) {
 
 const exportState = { content: "today", format: "pdf", style: "clean" };
 bindSegmented("#content-seg", (v) => { exportState.content = v; renderExportMeta(); });
-bindSegmented("#format-seg", (v) => (exportState.format = v));
+bindSegmented("#format-seg", (v) => { exportState.format = v; renderExportMeta(); });
 bindSegmented("#style-seg", (v) => (exportState.style = v));
 
 /** 当前导出内容对应的生词列表：今日生词 | 历史生词 */
@@ -2964,15 +4063,20 @@ function exportQueries() {
   return records.history.filter((h) => h && h.ts && bizDayOf(h.ts) === day).length;
 }
 
+const EXPORT_CONTENT_NAME = { today: "今日生词", starred: "历史生词", stats: "学习统计" };
+const EXPORT_FORMAT_NAME = { pdf: "PDF", word: "Word", png: "PNG" };
+
 function renderExportMeta() {
   rolloverIfNeeded(); // 跨 04:00 先滚动业务日，保证「今日」= 当前业务日
-  const el = $("#export-meta-count");
-  if (el) el.textContent = `${exportWords().length} 个生词 · ${
-    exportState.content === "starred"
-      ? `累计 ${exportQueries()} 次查询`
-      : `今日 ${exportQueries()} 次查询`}`;
-  const dEl = $("#export-meta-date");
-  if (dEl) dEl.textContent = zhBizDate(vocabDay()); // 业务日期（04:00 切换点）
+  const isStats = exportState.content === "stats"; // 学习统计：前端占位，导出能力后续增设
+  const tEl = $("#export-preview-title");
+  if (tEl) tEl.textContent = `${EXPORT_FORMAT_NAME[exportState.format]} · ${EXPORT_CONTENT_NAME[exportState.content]}`;
+  const sEl = $("#export-preview-sub");
+  if (sEl) sEl.textContent = isStats
+    ? "学习统计导出正在设计中 · 敬请期待"
+    : "VocabHit 水印 · A4 竖版";
+  const btn = $("#export-btn");
+  if (btn) btn.disabled = isStats;
 }
 
 /** 导出文档 HTML（自包含样式，统一视觉网格：列对齐 / 等长分割线 / 一致间距）。
@@ -3159,6 +4263,7 @@ async function exportViaTemplate(fmt, name) {
 }
 
 $("#export-btn").addEventListener("click", async () => {
+  if (exportState.content === "stats") { showToast("学习统计导出即将上线"); return; } // 占位选项双保险（按钮已 disabled）
   rolloverIfNeeded(); // 跨 04:00 先滚动业务日（与导出内容口径一致）
   const dateStr = vocabDay(); // 业务日期（04:00 切换点），非 UTC/自然日期
   const fmt = exportState.format;
@@ -3204,6 +4309,11 @@ renderAll();
 
 applyTheme(localStorage.getItem("vc-theme") || "system", false);
 initOverlay();
+initNotify();
+
+/* 启动闪屏：首页初始化完成 → 通知闪屏可按自然结束点关闭（见 js/splash.js，
+   首页先就绪时闪屏播完即走、不人为延迟；闪屏未加载时此调用自动跳过） */
+if (window.__vhSplash) window.__vhSplash.appReady();
 
 /* 回到前台：检查跨天重置 + 重载记录（与后台悬浮查词互通）+ 悬浮查词授权结果 */
 document.addEventListener("visibilitychange", () => {
@@ -3215,6 +4325,7 @@ document.addEventListener("visibilitychange", () => {
   syncReviewWithWords();
   migrateReview();
   renderAll();
+  syncNotifyPermission(); // 通知提醒：权限/计划随回前台校正（含从系统通知设置页返回）
   if (overlayPending && hasBridge()) {
     overlayPending = false;
     if (window.AndroidBridge.canDrawOverlays()) {
@@ -3229,3 +4340,42 @@ document.addEventListener("visibilitychange", () => {
     }
   }
 });
+
+/* 预览注入态：打开 index.html?seed=w2m 自动注入测试数据并进入 Review（无需点击/跳转） */
+(function previewSeed() {
+  const sp = new URLSearchParams(location.search).get("seed");
+  if (sp === "w2m" || sp === "full") {
+    try {
+      const now = Date.now();
+      const vd = (t) => { const d = new Date(t - 4 * 3600 * 1000); const p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+      const shuffle = (a) => { const r = a.slice(); for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
+      const WORDS = ["manufacturer", "manufacture", "temporary", "abandon", "circumstance", "deteriorate", "articulate", "abundant", "manuscript", "miniature"];
+      const records = { day: vd(now), history: [], words: {} };
+      const review = { words: {} };
+      WORDS.forEach((w, i) => {
+        const total = 3 + (i % 4);
+        records.words[w] = { today: 1, total, first: vd(now - 7 * 86400000), last: now - 3600000, starred: true, starredAt: now - 7 * 86400000, firstQueriedAt: now - 7 * 86400000, deleted: false };
+        review.words[w] = { known: 2, fuzzy: 1, unknown: 0, total, firstAt: now - 7 * 86400000, lastAt: now - 3600000, stage: 2, mode: "long", origStage: 0, nextAt: now - (WORDS.length - i) * 600000 };
+      });
+      const words = WORDS.slice();
+      let tasks = [];
+      if (sp === "w2m") { words.forEach((w) => tasks.push({ word: w, step: "w2m" })); tasks = shuffle(tasks); }
+      else { words.forEach((w) => { tasks.push({ word: w, step: "recall" }); tasks.push({ word: w, step: "w2m" }); tasks.push({ word: w, step: "m2w" }); }); tasks = shuffle(tasks); }
+      const session = {
+        day: vd(now), phase: "meaning", queue: tasks, idx: 0, current: null, currentTask: null, lastResult: null, snapshot: null,
+        stats: { n: 0, known: 0, fuzzy: 0, unknown: 0 }, answeredToday: {}, initialCount: words.length, mcqData: null,
+        mcqStats: { w2mCorrect: 0, m2wCorrect: 0, w2mTotal: 0, m2wTotal: 0 }, completed: {}, wordResults: {}, wordsDone: {}, detailCtx: null,
+        spellQueue: sp === "w2m" ? [] : shuffle(words), spellIdx: 0, spell: { submitted: false, correct: false, input: "" }, spellStats: { correct: 0, wrong: 0, skipped: 0 }
+      };
+      localStorage.setItem("vc-records", JSON.stringify(records));
+      localStorage.setItem("vc-review", JSON.stringify(review));
+      localStorage.setItem("vc-review-session-v2", JSON.stringify(session));
+      openReview();
+      return;
+    } catch (e) { console.error("[preview-seed]", e); }
+  }
+  if (localStorage.getItem("vc-auto-review") === "1") {
+    localStorage.removeItem("vc-auto-review");
+    openReview();
+  }
+})();

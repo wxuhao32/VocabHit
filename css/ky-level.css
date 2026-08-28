@@ -1,0 +1,55 @@
+/* ============================================================
+   考研词书释义分级 · 视觉样式
+   ------------------------------------------------------------
+   - 仅作用于考研词书释义的等级着色（浅色 / 深色 / 跟随系统 三态）。
+   - 柔和、低饱和，适配 VocabHit 暖色 UI，辅助记忆而非荧光笔效果。
+   - .ky-ob 「僻」字角标：极小、仅作辅助提示，不抢释义视觉重点。
+   - 词典详情页与 Review 各界面共用同一套等级色（数据属性 → 一致渲染）。
+   ============================================================ */
+
+/* 常见、通用释义 → 柔和绿 */
+.ky-lv-common { color: #3F8E5C; }
+/* 一般常见释义 → 柔和琥珀黄 */
+.ky-lv-normal { color: #A6782B; }
+/* 少见、生僻、冷门释义 → 柔和灰 */
+.ky-lv-rare   { color: #87909F; }
+
+/* 「僻」字角标：极小、陶土色，不抢释义视觉重点 */
+.ky-ob {
+  margin-left: 1px;
+  font-size: 0.52em;
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: super;
+  color: #B8846E;
+}
+
+/* ---------- 深色模式（显式 data-theme="dark"） ---------- */
+html[data-theme="dark"] .ky-lv-common { color: #6DC693; }
+html[data-theme="dark"] .ky-lv-normal { color: #DBB05A; }
+html[data-theme="dark"] .ky-lv-rare   { color: #96A0AF; }
+html[data-theme="dark"] .ky-ob        { color: #D6A58E; }
+
+/* ---------- 跟随系统深色（data-theme="system"） ---------- */
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .ky-lv-common { color: #6DC693; }
+  html[data-theme="system"] .ky-lv-normal { color: #DBB05A; }
+  html[data-theme="system"] .ky-lv-rare   { color: #96A0AF; }
+  html[data-theme="system"] .ky-ob        { color: #D6A58E; }
+}
+
+/* ---------- MCQ 答题反馈状态 ----------
+   作答前：选项内释义按等级显示颜色；
+   作答后：整卡上色（正确绿 / 错误红 / 揭示正确），释义等级色让位于反馈色，
+   保证「对 / 错」一眼可辨。 */
+.rv-mcq-option.correct .ky-lv,
+.rv-mcq-option.reveal-correct .ky-lv,
+.rv-mcq-option.wrong .ky-lv { color: inherit; }
+.rv-mcq-option.correct .ky-ob,
+.rv-mcq-option.reveal-correct .ky-ob,
+.rv-mcq-option.wrong .ky-ob { color: inherit; }
+
+/* 看词选义选项中的词性标签：作答后同样让位于「对 / 错」反馈色 */
+.rv-mcq-option.correct .rv-mcq-pos,
+.rv-mcq-option.reveal-correct .rv-mcq-pos,
+.rv-mcq-option.wrong .rv-mcq-pos { color: inherit; opacity: 0.75; }

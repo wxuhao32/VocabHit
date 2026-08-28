@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Edge-to-Edge：系统栏透明，内容延伸至全屏；图标明暗由代码按主题控制 -->
     <style name="AppTheme" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowBackground">#F7F7F8</item>
+        <!-- 与 Web 首页 bg 变量一致：启动闪屏淡出前后窗口底色无色差 -->
+        <item name="android:windowBackground">#F7F8FA</item>
+        <!-- Android 12+ 系统启动屏（Splash Screen）背景与窗口底色/启动闪屏对齐，
+             消除系统启动屏 → WebView 内容之间的白闪；Android 11 及以下忽略此属性 -->
+        <item name="android:windowSplashScreenBackground" tools:targetApi="s">#F7F8FA</item>
     </style>
 </resources>
