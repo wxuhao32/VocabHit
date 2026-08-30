@@ -1,0 +1,33 @@
+/* ============================================================
+   应用背景层（v1.2.6 纯新增，独立文件：不修改既有任何规则）
+   ------------------------------------------------------------
+   #app-bg 是 position:fixed 的纯视觉装饰层：
+   · 恒定固定在 Viewport 底层，页面内容滚动时背景静止不动；
+   · fixed 元素不参与文档流 → 不产生额外滚动区域/布局溢出；
+   · pointer-events:none + aria-hidden → 永远不是可交互元素；
+   · 位于 DOM 最前 + z-index:0 → .app（position:relative）及其
+     内部全部组件、弹窗、Tab、列表都绘制在其上层，层级不变；
+   · 默认 1 = 不启用图片层（现有默认背景，本文件零影响）。
+   ============================================================ */
+
+#app-bg {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-color: var(--bg); /* 主题底色：图片之下永远先铺现有背景色，深浅主题都不露白 */
+  background-position: center;
+  background-size: cover;      /* 按屏幕比例等比放大居中裁剪，绝不拉伸变形 */
+  background-repeat: no-repeat;
+}
+
+/* 启用图片背景（默认 2 / 自定义）：.app 仅变透明露出背景层，
+   卡片/输入框/弹窗等自身表面色不变，组件位置尺寸层级全部不动 */
+body.has-app-bg #app-bg { display: block; }
+body.has-app-bg .app { background: transparent; }
+
+/* Review 复习/答题阶段：隐藏背景层并恢复 .app 不透明底色，
+   与现有 review-active 全屏界面完全一致（退出后自动恢复背景） */
+body.has-app-bg.review-active #app-bg { display: none; }
+body.has-app-bg.review-active .app { background: var(--bg); }

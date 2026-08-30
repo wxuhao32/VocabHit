@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动窗口背景：底色 + 居中应用图标。
+     系统启动屏（Android 12+ 同样居中显示此图标）结束后的窗口首帧不再是纯色空白，
+     图标一直停留到 WebView 内启动闪屏（字母动画）淡入接管，视觉全程连续。 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/window_bg" />
+    <item
+        android:width="96dp"
+        android:height="96dp"
+        android:drawable="@mipmap/ic_launcher"
+        android:gravity="center" />
+</layer-list>

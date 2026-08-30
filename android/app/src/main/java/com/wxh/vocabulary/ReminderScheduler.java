@@ -12,8 +12,14 @@ import java.util.Calendar;
  * 通知提醒的排程中心（AlarmManager）。
  *
  * 设计要点：
- *   - 用系统 AlarmManager 精确闹钟，App 进程被杀、WebView 未打开均不影响触发
- *     （不依赖任何前台页面 / Service 常驻）
+ *   - 用系统 AlarmManager 的 setAlarmClock（闹钟型）注册，App 进程被杀、WebView 未打开
+ *     均不影响触发（不依赖任何前台页面 / Service 常驻）。选它而非 setExactAndAllowWhileIdle：
+ *     ① Doze 深度休眠中依然准点唤醒（系统将其与用户亲手设的闹钟同等对待）
+ *     ② OEM 后台管杀存活率最高（提醒/吃药类 App 的标准送达方案）
+ *     ③ 权限走 USE_EXACT_ALARM（Manifest 声明即授予）；而 setExactAndAllowWhileIdle 的
+ *        SCHEDULE_EXACT_ALARM 在 Android 12+/14 起默认拒绝，会退化成非精确窗口，
+ *        Doze/国产 ROM 省电下被无限期推迟 → 到点完全不响
+ *     代价：触发前状态栏显示闹钟图标——恰好向用户确认「提醒已就绪」
  *   - apply() 统一入口：开 = 先取消旧计划再按新时间排；关 = 取消计划
  *     用户改时间 → 走同一入口，旧闹钟被同一个 PendingIntent 覆盖替换，不会重复提醒
  *   - syncFromPrefs() 用于「无用户操作」的恢复场景：App 启动、系统重启、
@@ -30,7 +36,8 @@ public final class ReminderScheduler {
     public static final String GO_TASKS = "tasks";
 
     private static final int REQ_CHECK = 7301;
-    /** 无法使用精确闹钟时的容错窗口 */
+    private static final int REQ_SHOW = 7302; // 状态栏闹钟图标的点击意图
+    /** setAlarmClock 不可用时的容错窗口 */
     private static final long WINDOW_MS = 15 * 60 * 1000L;
 
     private ReminderScheduler() { }
@@ -40,6 +47,15 @@ public final class ReminderScheduler {
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
         return PendingIntent.getBroadcast(c, REQ_CHECK, it, flags);
+    }
+
+    /** 状态栏闹钟图标的落地意图（点击图标 → 打开 App） */
+    private static PendingIntent showIntent(Context c) {
+        Intent it = new Intent(c, MainActivity.class);
+        it.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+        if (Build.VERSION.SDK_INT >= 23) flags |= PendingIntent.FLAG_IMMUTABLE;
+        return PendingIntent.getActivity(c, REQ_SHOW, it, flags);
     }
 
     /** 下一次触发时刻：当天该时刻已过则顺延到明天同一时刻 */
@@ -73,24 +89,24 @@ public final class ReminderScheduler {
         schedule(c, ReminderPrefs.getHour(c), ReminderPrefs.getMinute(c));
     }
 
-    private static void schedule(Context c, int hour, int minute) {
+    /** 排程（apply / 启动静默同步共用）：setAlarmClock 闹钟型注册，异常 ROM 兜底时间窗 */
+    public static void schedule(Context c, int hour, int minute) {
         AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
         if (am == null) return;
         long trigger = nextTrigger(hour, minute, System.currentTimeMillis());
         PendingIntent pi = pending(c);
         try {
-            boolean exactAllowed = Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms();
-            if (exactAllowed) {
-                am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi);
-            } else {
-                // 用户/系统关闭了精确闹钟权限：退化为时间窗，仍然会到点（最多延迟一个窗口）
-                am.setWindow(AlarmManager.RTC_WAKEUP, trigger, WINDOW_MS, pi);
-            }
-        } catch (SecurityException e) {
+            // 闹钟型：系统与用户亲手设的闹钟同等对待 —— Doze 准点唤醒、ROM 存活率最高
+            am.setAlarmClock(new AlarmManager.AlarmClockInfo(trigger, showIntent(c)), pi);
+            android.util.Log.d("VHReminder", "scheduled(alarmClock) " + hour + ":" + minute
+                    + " trigger=" + trigger);
+        } catch (Throwable t) {
+            android.util.Log.d("VHReminder", "setAlarmClock failed: " + t);
             try {
                 am.setWindow(AlarmManager.RTC_WAKEUP, trigger, WINDOW_MS, pi);
+                android.util.Log.d("VHReminder", "scheduled(window fallback) " + hour + ":" + minute);
             } catch (Throwable ignored) { }
-        } catch (Throwable ignored) { }
+        }
     }
 
     /** 取消已设定的提醒 */
@@ -99,6 +115,7 @@ public final class ReminderScheduler {
         if (am == null) return;
         try {
             am.cancel(pending(c));
+            android.util.Log.d("VHReminder", "cancelled");
         } catch (Throwable ignored) { }
     }
 }

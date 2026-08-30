@@ -10,21 +10,24 @@
        文档首帧颜色也与启动窗口底色（#F7F8FA）一致，消除启动动画前的白闪帧 */
     try {
       var t = localStorage.getItem("vc-theme") || "system";
-      document.documentElement.dataset.theme = t;
-      var dark = t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+      // dataset.theme 存解析后的具体主题（dark/light）；「跟随系统」优先读原生 UI Mode
+      // （WebView 的 prefers-color-scheme 在部分 ROM 上恒报浅色，不可靠）
+      var dark = t === "dark" || (t === "system" && (window.AndroidBridge ? window.AndroidBridge.getSystemDark() === true : matchMedia("(prefers-color-scheme: dark)").matches));
+      document.documentElement.dataset.theme = dark ? "dark" : "light";
       document.documentElement.style.background = dark ? "#0B0E14" : "#F7F8FA";
-    } catch (e) { document.documentElement.dataset.theme = "system"; }
+    } catch (e) { document.documentElement.dataset.theme = "light"; }
   </script>
   <style>
     /* 首帧底色兜底（与启动窗口/闪屏同色）；外部样式表加载后由各自规则接管 */
     html, body, #splash { background: #F7F8FA; }
   </style>
-  <link rel="stylesheet" href="css/style.css?v=24" />
-  <link rel="stylesheet" href="css/knowledge.css?v=11" />
-  <link rel="stylesheet" href="css/math-lab.css?v=4" />
+  <link rel="stylesheet" href="css/style.css?v=31" />
+  <link rel="stylesheet" href="css/knowledge.css?v=12" />
+  <link rel="stylesheet" href="css/math-lab.css?v=5" />
   <link rel="stylesheet" href="css/spaced-repetition.css?v=7" />
-  <link rel="stylesheet" href="css/ky-level.css?v=1" />
-  <link rel="stylesheet" href="css/splash.css?v=1" />
+  <link rel="stylesheet" href="css/ky-level.css?v=2" />
+  <link rel="stylesheet" href="css/splash.css?v=2" />
+  <link rel="stylesheet" href="css/app-bg.css?v=1" />
 </head>
 <body>
 
@@ -34,6 +37,9 @@
   <div id="splash" aria-hidden="true">
     <span class="splash-word"><span class="splash-letter">V</span><span class="splash-letter">o</span><span class="splash-letter">c</span><span class="splash-letter">a</span><span class="splash-letter">b</span><span class="splash-letter hit">H</span><span class="splash-letter hit">i</span><span class="splash-letter hit">t</span></span>
   </div>
+
+  <!-- 闪屏脚本紧随 #splash：文档一解析到这里立即启动字母动画，不等下方大脚本 -->
+  <script src="js/splash.js?v=1"></script>
 
   <!-- 移动端应用容器 -->
   <div class="app" id="app">
@@ -233,6 +239,13 @@
         <h1 class="large-title">查询记录</h1>
       </header>
       <p class="page-subtitle muted">全部查询 · 按时间倒序</p>
+      <!-- 时间范围筛选：仅过滤本页列表展示，不改动历史数据与查询次数统计 -->
+      <div class="segmented wide history-range-seg" id="history-range-seg" role="radiogroup" aria-label="时间范围">
+        <button class="seg-btn" data-value="all" role="radio" aria-checked="true">全部</button>
+        <button class="seg-btn" data-value="day" role="radio" aria-checked="false">本日内</button>
+        <button class="seg-btn" data-value="week" role="radio" aria-checked="false">近一周</button>
+        <button class="seg-btn" data-value="month" role="radio" aria-checked="false">近一月</button>
+      </div>
       <ul class="history-list" id="history-list">
         <!-- JS 渲染 -->
       </ul>
@@ -257,6 +270,26 @@
               <button class="seg-btn" data-value="system" role="radio" aria-checked="false">跟随系统</button>
             </div>
           </div>
+          <div class="settings-item">
+            <div class="settings-item-label">
+              <span>背景</span>
+            </div>
+            <div class="segmented" id="bg-seg" role="radiogroup" aria-label="应用背景">
+              <button class="seg-btn" data-value="default1" role="radio" aria-checked="true">默认 1</button>
+              <button class="seg-btn" data-value="default2" role="radio" aria-checked="false">默认 2</button>
+              <button class="seg-btn" data-value="custom" role="radio" aria-checked="false">自定义</button>
+            </div>
+          </div>
+          <button class="settings-item clickable" id="bg-change" type="button" hidden>
+            <div class="settings-item-label">
+              <span>更换背景图片</span>
+              <span class="settings-item-value">从相册选择</span>
+            </div>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
+          <input type="file" id="bg-file" accept="image/*" hidden />
           <div class="settings-item">
             <div class="settings-item-label">
               <span>每日重置</span>
@@ -301,18 +334,36 @@
               <path d="M6 3l5 5-5 5"/>
             </svg>
           </button>
+          <button class="settings-item clickable" id="json-export-entry" type="button">
+            <div class="settings-item-label">
+              <span>导出 JSON</span>
+              <span class="settings-item-value">全量备份</span>
+            </div>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
+          <button class="settings-item clickable" id="json-import-entry" type="button">
+            <div class="settings-item-label">
+              <span>导入 JSON</span>
+              <span class="settings-item-value">从备份恢复</span>
+            </div>
+            <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 3l5 5-5 5"/>
+            </svg>
+          </button>
         </div>
       </section>
 
       <section class="settings-group">
         <h2 class="settings-group-title">关于</h2>
         <div class="settings-list">
-          <div class="settings-item">
-            <div class="settings-item-label">
-              <span>版本</span>
-              <span class="settings-item-value">1.1.1</span>
+            <div class="settings-item">
+              <div class="settings-item-label">
+                <span>版本</span>
+                <span class="settings-item-value">1.2.7</span>
+              </div>
             </div>
-          </div>
         </div>
       </section>
 
@@ -512,6 +563,20 @@
       <div class="sheet-body" id="sheet-body"></div>
     </div>
 
+    <!-- ============ 导出二次选择 Bottom Sheet（导出前选择方式/勾选生词，不改生词数据） ============ -->
+    <div class="sheet-overlay" id="export-sheet-overlay" aria-hidden="true"></div>
+    <div class="sheet" id="export-sheet" role="dialog" aria-modal="true" aria-hidden="true">
+      <div class="sheet-grabber"></div>
+      <div class="export-sheet-head">
+        <p class="export-sheet-title" id="export-sheet-title">导出</p>
+        <button class="sheet-close" id="export-sheet-close" type="button" aria-label="关闭">取消</button>
+      </div>
+      <div class="sheet-body" id="export-sheet-body"></div>
+      <div class="export-sel-footer" id="export-sel-footer" hidden>
+        <button class="export-submit export-sel-btn" id="export-sel-btn" type="button" disabled>导出</button>
+      </div>
+    </div>
+
     <!-- ============ 底部导航 ============ -->
     <nav class="tabbar" id="tabbar" aria-label="主导航">
       <button class="tab active" data-tab="home" type="button">
@@ -544,23 +609,25 @@
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
   </div>
 
-  <script src="js/splash.js?v=1"></script>
-  <script src="js/dict.js"></script>
-  <script src="js/ky-manual.js"></script>
-  <script src="js/ky-level.js"></script>
-  <script src="js/ecdict.js"></script>
-  <script src="js/stats.js?v=1"></script>
-  <script src="js/export-template.js?v=1"></script>
-  <script src="js/app.js?v=29"></script>
-  <script src="js/knowledge.js?v=17"></script>
-  <script src="js/math-lab/mathEngine.js?v=2"></script>
-  <script src="js/math-lab/mathLabData.js?v=2"></script>
-  <script src="js/math-lab/mathLabConfig.js?v=2"></script>
-  <script src="js/math-lab/mathRenderer.js?v=2"></script>
-  <script src="js/math-lab/mathCanvas.js?v=4"></script>
-  <script src="js/math-lab/mathPresets.js?v=3"></script>
-  <script src="js/math-lab/mathLab.js?v=6"></script>
-  <script src="js/spaced-repetition/srData.js?v=5"></script>
-  <script src="js/spaced-repetition/srUI.js?v=7"></script>
+  <script defer src="js/dict.js"></script>
+  <script defer src="js/ky-manual.js"></script>
+  <script defer src="js/ky-level.js?v=2"></script>
+  <script defer src="js/ecdict.js"></script>
+  <script defer src="js/stats.js?v=1"></script>
+  <script defer src="js/export-template.js?v=2"></script>
+  <script defer src="js/app.js?v=41"></script>
+  <script defer src="js/app-bg.js?v=2"></script>
+  <script defer src="js/stats-export.js?v=1"></script>
+  <script defer src="js/data-manager.js?v=3"></script>
+  <script defer src="js/knowledge.js?v=18"></script>
+  <script defer src="js/math-lab/mathEngine.js?v=2"></script>
+  <script defer src="js/math-lab/mathLabData.js?v=3"></script>
+  <script defer src="js/math-lab/mathLabConfig.js?v=2"></script>
+  <script defer src="js/math-lab/mathRenderer.js?v=2"></script>
+  <script defer src="js/math-lab/mathCanvas.js?v=4"></script>
+  <script defer src="js/math-lab/mathPresets.js?v=4"></script>
+  <script defer src="js/math-lab/mathLab.js?v=7"></script>
+  <script defer src="js/spaced-repetition/srData.js?v=5"></script>
+  <script defer src="js/spaced-repetition/srUI.js?v=7"></script>
 </body>
 </html>

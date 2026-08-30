@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_bg">#FFFFFF</color>
+    <!-- 启动窗口底色（浅色）：与 Web 首页/闪屏 bg 一致 -->
+    <color name="window_bg">#F7F8FA</color>
 </resources>

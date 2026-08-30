@@ -226,5 +226,64 @@
     }).join("；");
   }
 
-  window.KY = { kyLevel, kyFlatMeanings, kyTopSenses, kySpan, kyJoin, kyOptionHtml, config: CFG };
+  /* ---------- 导出专用（PDF / PNG / Word 与 App 内同一套分级与颜色） ---------- */
+
+  /** 导出等级色：固定取浅色态（与 css/ky-level.css :root 变量同值同步）。
+      导出模板（线条小狗纸面 / Word 白底）恒为浅色背景，若跟随 App 深色
+      主题取色会在浅底上失去对比度；分级与「僻」标记逻辑与 App 内完全
+      同一（kyLevel 单一数据源），仅色值恒用浅色态。改色时需同步此处与
+      CSS :root 变量。 */
+  const EXPORT_COLORS = {
+    common: "#3F8E5C",
+    normal: "#A6782B",
+    rare:   "#87909F",
+    obscure: "#B8846E",
+  };
+
+  function levelColors() { return { ...EXPORT_COLORS }; }
+
+  function levelColor(colors, level) {
+    return level === "common" ? colors.common
+      : level === "rare" ? colors.rare
+      : colors.normal;
+  }
+
+  /** 考研词书 → 导出富文本行：[{ segs: [{t, c?, sup?}] }]。
+      - 逐条释义沿用 kyLevel 的等级与 obscure（不重新判定）；
+      - c = 等级色（缺省为导出正文色）；sup = 「僻」角标 token（由渲染端缩小上标绘制）；
+      - 词性与「；」分隔符不带颜色（与 App 内 detailMeaningsHtml 的纯色一致）。
+      非考研词书返回 null（调用方回退原有纯文本行）。 */
+  function exportLines(word) {
+    const g = kyLevel(word);
+    if (!g) return null;
+    const colors = levelColors();
+    return g.rows.map((row) => {
+      const segs = [];
+      if (row.pos) segs.push({ t: `${row.pos} ` });
+      row.meanings.forEach((m, i) => {
+        if (i) segs.push({ t: "；" });
+        segs.push({ t: m.text, c: levelColor(colors, m.level) });
+        if (m.obscure) segs.push({ t: "僻", c: colors.obscure, sup: true });
+      });
+      return { segs };
+    });
+  }
+
+  /** 考研词书 → 自包含着色 HTML 行数组（Word / 回退 HTML 导出用）。
+      颜色内联 style（导出文件不依赖 ky-level.css），取值同样来自 CSS 变量。
+      返回 ["<div>…</div>", …]；非考研词书返回 null。 */
+  function exportHtml(word) {
+    const lines = exportLines(word);
+    if (!lines) return null;
+    return lines.map((line) => {
+      const inner = line.segs.map((s) => {
+        const text = esc(s.t);
+        if (s.sup) return `<sup style="color:${s.c};font-size:0.52em;font-weight:600;line-height:1;">${text}</sup>`;
+        return s.c ? `<span style="color:${s.c}">${text}</span>` : text;
+      }).join("");
+      return `<div>${inner}</div>`;
+    });
+  }
+
+  window.KY = { kyLevel, kyFlatMeanings, kyTopSenses, kySpan, kyJoin, kyOptionHtml, levelColors, exportLines, exportHtml, config: CFG };
 })();

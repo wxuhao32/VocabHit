@@ -30,6 +30,11 @@ tools/
 verify/
 icon_design/
 
+# ===== 临时测试目录（本地验证用，不进入版本库） =====
+.tmp-dm-test/
+.tmp*/
+*.tmp*
+
 # ===== Python / Node 脚本 =====
 *.py
 
@@ -48,9 +53,11 @@ icon_design/
 !线条小狗3.png
 # 保留应用图标
 !VH icon.png
-# 保留应用内图片资源（吉祥物等）
+# 保留应用内图片资源（吉祥物 / 内置背景等）
 !android/app/src/main/assets/www/img/*.png
+!android/app/src/main/assets/www/img/*.jpg
 !img/*.png
+!img/*.jpg
 
 # ===== AI 工具 / 编辑器脚手架 =====
 .codebuddy/

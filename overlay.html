@@ -162,6 +162,26 @@
     .d-actions { display: inline-flex; align-items: center; gap: 0; flex: none; margin-left: 6px; }
 
     .detail { padding: 14px 16px 15px; }
+    /* ---- 单词笔记（与主应用共享 localStorage vc-word-notes，同词同笔记） ---- */
+    .note-label { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin: 12px 0 6px; }
+    .note-input {
+      width: 100%;
+      box-sizing: border-box;
+      resize: none;
+      border: 1px solid var(--hairline);
+      border-radius: 14px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 12.5px;
+      line-height: 1.5;
+      padding: 7px 11px;
+      min-height: 34px;
+      max-height: 96px;
+      overflow-y: auto;
+    }
+    .note-input:focus { outline: none; border-color: var(--accent); }
+    .note-input::placeholder { color: var(--text-3); }
     .d-word { font-size: 19px; font-weight: 680; color: var(--text); letter-spacing: -0.01em; }
     .d-word { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .d-word sup { color: var(--accent); font-size: 11px; margin-left: 3px; }
@@ -555,8 +575,41 @@
       <p class="d-ph">${esc(ph(w))}</p>
       ${lines(w).map((l) => `<p class="d-line">${esc(l)}</p>`).join("")}
       <p class="d-meta">今日查询 ${m.today} 次 · 累计查询 ${m.total} 次</p>
+      <p class="note-label">笔记</p>
+      <textarea class="note-input" rows="1" placeholder="记点笔记…">${esc(getWordNote(w))}</textarea>
     </div>`;
+    bindOverlayNote(result.querySelector(".note-input"), w);
     requestAnimationFrame(reportSize); // 等下一帧 layout 稳定后再测尺寸，避免 IME 抖动/刚 innerHTML 后的中间值被上报 → params.height 偏小 → 内容被截切
+  }
+
+  /* ---- 单词笔记：与主应用共享 vc-word-notes（同词同笔记，重启不丢） ---- */
+  function getWordNote(w) {
+    try {
+      const notes = JSON.parse(localStorage.getItem("vc-word-notes") || "{}");
+      const e = notes[w];
+      return e && typeof e.text === "string" ? e.text : "";
+    } catch (e) { return ""; }
+  }
+  function saveWordNote(w, text) {
+    try {
+      const t = String(text || "").replace(/^\s+|\s+$/g, "");
+      const notes = JSON.parse(localStorage.getItem("vc-word-notes") || "{}");
+      if (!t) delete notes[w]; else notes[w] = { text: t, ts: Date.now() };
+      localStorage.setItem("vc-word-notes", JSON.stringify(notes));
+      return true;
+    } catch (e) { return false; }
+  }
+  function bindOverlayNote(ta, w) {
+    if (!ta) return;
+    const autosize = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 96) + "px"; };
+    autosize();
+    let timer = null;
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (!saveWordNote(w, ta.value)) showToastSafe("笔记保存失败，请重试");
+    };
+    ta.addEventListener("input", () => { autosize(); if (timer) clearTimeout(timer); timer = setTimeout(flush, 600); });
+    ta.addEventListener("blur", flush);
   }
   /** +1 手动计数：与回车共用同一套 today/total 计数，每点击一次 +1 */
   function addOne(word) {

@@ -160,6 +160,7 @@
         '<p class="ml-item-sub">' + esc(P.typeLabel(e.type)) + ' · ' + esc(P.summaryOf(e)) + '</p>' +
         '</div>' +
         '<span class="ml-item-time">' + esc(P.timeAgo(e.lastAt)) + '</span>' +
+        '<button class="ml-item-more" data-exp-more="' + esc(e.id) + '" type="button" aria-label="删除实验">⋯</button>' +
         '</li>';
     }).join("");
   }
@@ -169,6 +170,22 @@
     if (!e) return;
     delete e.__fitX0; delete e.__fitX1; // 历史：直接用持久化视图
     CV.open(e, "lab");
+  }
+
+  /** 删除单条实验记录：确认弹窗与预设删除一致 → 同步移除最近列表条目与本地持久化数据 */
+  function confirmDeleteExperiment(id) {
+    var e = D.expById(id);
+    if (!e) return;
+    P.confirmDialog({
+      title: "删除实验",
+      text: "删除「" + (e.name || P.summaryOf(e)) + "」？此操作不可撤销。",
+      okText: "删除",
+      onOk: function () {
+        D.deleteExperiment(id);
+        renderRecent();
+        toast("实验已删除");
+      }
+    });
   }
 
   /* ================= 配置页 ================= */
@@ -230,6 +247,8 @@
     $("#ml-back").addEventListener("click", function () { switchTab("home"); });
     $("#ml-new").addEventListener("click", openNewExperiment);
     $("#ml-recent-list").addEventListener("click", function (e) {
+      var more = e.target.closest("[data-exp-more]");
+      if (more) { confirmDeleteExperiment(more.getAttribute("data-exp-more")); return; } // 删除按钮：不触发行打开
       var item = e.target.closest("[data-exp]");
       if (item) openExperiment(item.getAttribute("data-exp"));
     });

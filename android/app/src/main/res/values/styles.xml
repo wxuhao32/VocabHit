@@ -6,9 +6,9 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">true</item>
         <!-- 与 Web 首页 bg 变量一致：启动闪屏淡出前后窗口底色无色差 -->
-        <item name="android:windowBackground">#F7F8FA</item>
+        <item name="android:windowBackground">@drawable/window_splash_bg</item>
         <!-- Android 12+ 系统启动屏（Splash Screen）背景与窗口底色/启动闪屏对齐，
              消除系统启动屏 → WebView 内容之间的白闪；Android 11 及以下忽略此属性 -->
-        <item name="android:windowSplashScreenBackground" tools:targetApi="s">#F7F8FA</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="s">@color/window_bg</item>
     </style>
 </resources>

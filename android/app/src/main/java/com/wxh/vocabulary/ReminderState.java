@@ -122,7 +122,9 @@ public final class ReminderState {
         for (Item it : tasks) {
             if (!visibleOn(it, dayStr)) continue;
             total++;
-            if (done.contains(it.id)) doneCount++;
+            // 打卡集合仅对快照所属业务日有效：闹钟延迟跨过 04:00 进入新的一天时，
+            // 新一天的打卡应为空（用户尚未打卡），不能沿用快照日记录误判「已完成」
+            if (dayStr.equals(day) && it.id != null && done.contains(it.id)) doneCount++;
         }
         return total > 0 && doneCount < total;
     }

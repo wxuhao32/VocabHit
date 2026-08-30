@@ -488,7 +488,9 @@ html[data-theme="dark"] .ml-cv-topbar { box-shadow: 0 1px 10px rgba(0, 0, 0, 0.2
 html[data-theme="dark"] .ml-psheet-danger { color: #FF453A; }
 .ml-psheet-cancel { color: var(--text-2); }
 
-.ml-menu-name-row { padding: 0 20px 4px; }
+/* 实验名称行：与「重置视图」等 sheet 内卡片保持同一 8px 垂直节奏，
+   避免输入框卡片与上方按钮背景粘连成一块 */
+.ml-menu-name-row { margin-top: 8px; padding: 0 20px; }
 .ml-menu-name-row input {
   width: 100%;
   height: 44px;

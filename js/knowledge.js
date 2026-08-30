@@ -115,10 +115,25 @@
     if (changed) saveRepo();
   }
 
-  function saveMaterials() { localStorage.setItem(MATERIALS_KEY, JSON.stringify(materials)); }
-  function saveRepo() { localStorage.setItem(REPO_KEY, JSON.stringify(repo)); }
-  function saveHighlights() { localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(highlights)); }
-  function saveMistakes() { localStorage.setItem(MISTAKES_KEY, JSON.stringify(mistakes)); }
+  const STORAGE_FULL_MSG = "存储空间不足，本次数据未保存";
+  /* 存储超额保护：写入失败（空间不足等）不抛异常、不崩溃，统一 Toast 提示并返回 false；
+     调用方据此跳过成功态 UI（列表渲染 / 角标 / 数量），保证界面与磁盘数据一致 */
+  function saveMaterials() {
+    try { localStorage.setItem(MATERIALS_KEY, JSON.stringify(materials)); return true; }
+    catch (e) { showToast(STORAGE_FULL_MSG); return false; }
+  }
+  function saveRepo() {
+    try { localStorage.setItem(REPO_KEY, JSON.stringify(repo)); return true; }
+    catch (e) { showToast(STORAGE_FULL_MSG); return false; }
+  }
+  function saveHighlights() {
+    try { localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(highlights)); return true; }
+    catch (e) { showToast(STORAGE_FULL_MSG); return false; }
+  }
+  function saveMistakes() {
+    try { localStorage.setItem(MISTAKES_KEY, JSON.stringify(mistakes)); return true; }
+    catch (e) { showToast(STORAGE_FULL_MSG); return false; }
+  }
 
   /* ---------- 存储库（一级分类）辅助 ---------- */
 
@@ -410,7 +425,7 @@
       <div class="sheet kn-sheet" id="kn-sheet" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="sheet-grabber"></div>
         <div class="kn-sheet-head">
-          <p class="kn-sheet-title">加入 Repository</p>
+          <p class="kn-sheet-title" id="kn-sheet-title">加入 Repository</p>
           <button class="kn-sheet-cancel" id="kn-sheet-cancel" type="button">取消</button>
         </div>
         <div class="kn-sheet-body">
@@ -695,7 +710,7 @@
       addedAt: Date.now()
     };
     materials.items.unshift(item);
-    saveMaterials();
+    if (!saveMaterials()) { materials.items.shift(); return; } // 存储失败：回退内存数据，不渲染列表/角标，不进入阅读页
     renderMaterials();
     updateHomeBadges();
     openReader(item.id); // 解析成功 → 自动进入独立阅读页
@@ -1243,12 +1258,14 @@
 
   /* ================= 条目编辑 Bottom Sheet ================= */
 
-  const editorState = { open: false, catId: "phrase", draft: null };
+  /* editorState.editingId：非 null 时面板处于「编辑既有条目」模式（保存就地更新，绝不新建） */
+  const editorState = { open: false, catId: "phrase", draft: null, editingId: null };
 
-  function openEditor(draft) {
+  function openEditor(draft, editingId) {
     if (!draft) return;
     overlayCollapse(); // 编辑面板弹出时收起悬浮条展开态，避免遮挡
     editorState.draft = draft;
+    editorState.editingId = editingId || null;
     if (!allCats().some((c) => c.id === editorState.catId)) {
       const first = allCats()[0]; // 预设默认类型可能已被删除 → 退回首个可用类型
       editorState.catId = first ? first.id : editorState.catId;
@@ -1262,10 +1279,29 @@
     $("#kn-overlay").classList.add("visible");
     $("#kn-sheet").classList.add("open");
     $("#kn-sheet").setAttribute("aria-hidden", "false");
-    // 手动创建模式：隐藏「从原文选择」按钮（无原文可选）
-    if (draft.isManual) $("#kn-sheet").dataset.manual = "true";
+    $("#kn-sheet-title").textContent = editingId ? "编辑知识条目" : "加入 Repository";
+    // 手动创建 / 编辑模式：隐藏「从原文选择」按钮（无原文可选）
+    if (draft.isManual || editingId) $("#kn-sheet").dataset.manual = "true";
     else delete $("#kn-sheet").dataset.manual;
     editorState.open = true;
+  }
+
+  /** 从 Repository 展开的条目卡片进入编辑：字段带入面板，保存时按 id 就地更新 */
+  function openEntryEditor(entryId) {
+    const e = repo.entries.find((x) => x.id === entryId);
+    if (!e) return;
+    // 当前库类型已被删除时退回首个可用类型，避免保存时校验失败
+    if (!allCats().some((c) => c.id === e.catId)) {
+      const first = allCats()[0];
+      editorState.catId = first ? first.id : e.catId;
+    } else {
+      editorState.catId = e.catId;
+    }
+    openEditor({
+      content: e.content || "",
+      explanation: e.explanation || "",
+      context: e.context || ""
+    }, entryId);
   }
 
   function closeEditor() {
@@ -1275,6 +1311,7 @@
     $("#kn-sheet").setAttribute("aria-hidden", "true");
     editorState.open = false;
     editorState.draft = null;
+    editorState.editingId = null;
   }
 
   /** 面板输入同步回草稿（进入子模式摘取 / 保存前调用，防止丢编辑） */
@@ -1316,6 +1353,7 @@
       $("#kn-newcat-input").focus();
       return;
     }
+    if (editorState.editingId) { updateEntryInPlace(); return; }
     const explanation = draft.explanation || "";
     const context = draft.context || "";
     const catId = editorState.catId;
@@ -1360,6 +1398,29 @@
     if (currentMaterial && activePageId() === "page-reader") {
       enterSelectMode("content");
     }
+  }
+
+  /** 编辑保存：按 editingId 原条目就地更新（绝不生成新条目）。
+      id / createdAt / lastAt / sources / libraryId 等内部状态原样保留；
+      写入本地存储失败 → saveRepo 已提示，回滚内存改动且面板保持打开，绝不误报成功 */
+  function updateEntryInPlace() {
+    const draft = editorState.draft;
+    const entry = repo.entries.find((e) => e.id === editorState.editingId);
+    if (!entry) {
+      closeEditor(); // 条目已被删除：面板无处可存，直接关闭并刷新列表
+      renderRepo();
+      showToast("该条目已不存在");
+      return;
+    }
+    const prev = { content: entry.content, explanation: entry.explanation, context: entry.context, catId: entry.catId };
+    entry.content = draft.content;
+    entry.explanation = draft.explanation || "";
+    entry.context = draft.context || "";
+    entry.catId = editorState.catId;
+    if (!saveRepo()) { Object.assign(entry, prev); return; } // 存储失败：内存回滚，磁盘原数据完好
+    closeEditor();
+    renderRepo(); // 保存后立即刷新存储库内容
+    showToast("条目已更新");
   }
 
   /* ================= Repository：列表 / 分类筛选 / 搜索 / 展开 / 来源回跳 ================= */
@@ -1446,7 +1507,10 @@
             : `<p class="rp-meta">手动添加</p>`}
           <div class="rp-foot">
             <span class="rp-time">添加于 ${fmtCN(e.createdAt)}</span>
-            <button class="rp-del" data-rpdel type="button">删除</button>
+            <span class="rp-foot-btns">
+              <button class="rp-del rp-edit" data-rpedit type="button">编辑</button>
+              <button class="rp-del" data-rpdel type="button">删除</button>
+            </span>
           </div>
         </div></div></div>
       </li>`;
@@ -1841,7 +1905,10 @@
       ${sec("正确解答", m.correctAnswer)}
       ${sec("错因", m.mistakeReason)}
       ${sec("思路", m.solutionIdea)}
-      <button class="misdet-del" id="misdet-del" type="button">删除这道错题</button>`;
+      <div class="misdet-actions">
+        <button class="misdet-edit" id="misdet-edit-body" type="button">编辑这道错题</button>
+        <button class="misdet-del" id="misdet-del" type="button">删除这道错题</button>
+      </div>`;
   }
 
   function openMistakeDetail(id) {
@@ -1943,19 +2010,22 @@
     const reason = $("#mis-reason").value.trim();
     const idea = $("#mis-idea").value.trim();
     if (!misEditor.image && !q) { showToast("错题原图与错题文字至少填一项"); return; }
-    // 替换图片：旧图不再被引用 → 删除设备文件
-    if (misEditor.origImage && misEditor.origImage !== misEditor.image)
-      removeMistakeImageFile(misEditor.origImage);
     const editing = !!misEditor.id;
+    const m = editing ? mistakeById(misEditor.id) : null;
+    if (editing && !m) { // 条目已被删除：面板无处可存
+      closeMisSheet();
+      showToast("该错题已不存在");
+      return;
+    }
+    const prev = editing
+      ? { image: m.image, questionText: m.questionText, correctAnswer: m.correctAnswer, mistakeReason: m.mistakeReason, solutionIdea: m.solutionIdea }
+      : null;
     if (editing) {
-      const m = mistakeById(misEditor.id);
-      if (m) {
-        m.image = misEditor.image;
-        m.questionText = q;
-        m.correctAnswer = ans;
-        m.mistakeReason = reason;
-        m.solutionIdea = idea;
-      }
+      m.image = misEditor.image;
+      m.questionText = q;
+      m.correctAnswer = ans;
+      m.mistakeReason = reason;
+      m.solutionIdea = idea;
     } else {
       mistakes.items.unshift({
         id: uid("x"),
@@ -1968,7 +2038,15 @@
         solutionIdea: idea
       });
     }
-    saveMistakes();
+    if (!saveMistakes()) {
+      // 存储失败：saveMistakes 已提示 → 回滚内存改动，原记录与原图完好，面板保持打开，绝不误报成功
+      if (editing) Object.assign(m, prev);
+      else mistakes.items.shift();
+      return;
+    }
+    // 持久化成功后旧图才真正不再被引用 → 删除设备文件（失败路径不破坏原记录）
+    if (editing && misEditor.origImage && misEditor.origImage !== misEditor.image)
+      removeMistakeImageFile(misEditor.origImage);
     closeMisSheet(false); // 保存成功：新图已被引用，不可回收
     if (activePageId() === "page-mistake-detail") renderMistakeDetail();
     else if (activePageId() === "page-mistake-subject") renderMistakeItems();
@@ -2205,6 +2283,8 @@
         deleteEntry(del.closest(".rp-card").dataset.id);
         return;
       }
+      const ed = e.target.closest("[data-rpedit]");
+      if (ed) { openEntryEditor(ed.closest(".rp-card").dataset.id); return; }
       const head = e.target.closest(".rp-card-head");
       if (head) {
         const card = head.closest(".rp-card");
@@ -2308,6 +2388,8 @@
     $("#misdet-back").addEventListener("click", () => openMistakeSubject(currentSubjectId));
     $("#misdet-edit").addEventListener("click", () => openMisSheet(currentMistakeId));
     $("#misdet-body").addEventListener("click", (e) => {
+      const edBtn = e.target.closest("#misdet-edit-body");
+      if (edBtn) { openMisSheet(currentMistakeId); return; } // 与详情页右上「编辑」同一编辑面板
       const del = e.target.closest("#misdet-del");
       if (!del) return;
       if (!del.classList.contains("confirm")) {

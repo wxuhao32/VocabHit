@@ -158,6 +158,16 @@
     writeStore(KEY_RECENT, recent);
   }
 
+  /** 删除单条实验记录：experiments 与 recent 两处引用同步清除并立即持久化，不影响其他记录 */
+  function deleteExperiment(id) {
+    var before = experiments.items.length;
+    experiments.items = experiments.items.filter(function (e) { return e.id !== id; });
+    if (experiments.items.length === before) return; // id 不存在：不误写存储
+    recent.items = recent.items.filter(function (rid) { return rid !== id; });
+    writeStore(KEY_EXPERIMENTS, experiments);
+    writeStore(KEY_RECENT, recent);
+  }
+
   /* ---------- 最近实验 ---------- */
 
   function touchRecent(id) {
@@ -252,6 +262,7 @@
     expById: expById,
     recentExperiments: recentExperiments,
     saveExperiment: saveExperiment,
+    deleteExperiment: deleteExperiment,
     defaultName: defaultName,
     presetById: presetById,
     addPreset: addPreset,

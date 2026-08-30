@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 系统深色模式下的启动窗口底色：与 Web 深色主题 bg（#0B0E14）一致，
+         「跟随系统」时从系统启动屏到 WebView 首帧全程无色差。
+         手动浅色/深色的最终纠正仍由前端首帧内联脚本按 vc-theme 完成。 -->
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@drawable/window_splash_bg</item>
+        <item name="android:windowSplashScreenBackground" tools:targetApi="s">@color/window_bg</item>
+    </style>
+</resources>

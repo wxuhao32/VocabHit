@@ -170,6 +170,10 @@ ul { list-style: none; }
   animation: pageIn var(--t-med) var(--ease);
 }
 
+/* Review 状态页（无需复习 / 今日复习完成）：压缩页头顶距，让勾 + 标题贴近页面顶部 */
+#page-review.page { padding-top: 12px; padding-bottom: 24px; }
+#page-review .page-header { margin-bottom: 6px; }
+
 .page.active { display: block; }
 
 @keyframes pageIn {
@@ -193,6 +197,13 @@ ul { list-style: none; }
   z-index: 2; /* 叠在搜索框之上，形成自然的接触层次 */
   /* drop-shadow 跟随透明轮廓，营造轻微浮起感（避免矩形直角阴影） */
   filter: drop-shadow(0 4px 10px rgba(17, 24, 39, 0.10));
+}
+
+/* 深色模式下不渲染线条小狗：素材自带透明效果，深色背景上会发黑/反色，
+   直接 display:none 完全移除（无占位、无残影、不加滤镜） */
+html[data-theme="dark"] .home-mascot { display: none; }
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] .home-mascot { display: none; }
 }
 
 /* 页头右侧低调操作（如 Review 清空队列） */
@@ -419,6 +430,9 @@ ul { list-style: none; }
 /* ---------- 历史记录（Activity Feed） ---------- */
 .history-list { margin-top: 4px; }
 
+/* 查询记录页时间范围筛选（分段选择，与设置页/导出页同款控件） */
+.history-range-seg { margin: 0 0 14px; }
+
 /* 行 = 记录主体 + 右侧操作按钮 */
 .history-list li { display: flex; align-items: center; }
 .history-list li:last-child .history-item { border-bottom: none; }
@@ -559,11 +573,14 @@ ul { list-style: none; }
 /* 强调分割线的前一行去掉自身 hairline，避免两条线叠在一起 */
 .settings-item.no-border { border-bottom: none; }
 
-/* 设置项之间的强调分割线（比行间距更有留白，用于区分两个不同功能入口） */
+/* 设置项之间的强调分割线（比行间距更有留白，用于区分两个不同功能入口）。
+   必须用 border-top 而非 1px 高的 background 色块：WebView 合成时 1px 背景块
+   落在亚像素位置会丢块（线段中段出现缺口/变短）；border 与 .settings-item 的
+   border-bottom 同机制，渲染稳定。左右零边距，与同级分隔线同一长度基准。 */
 .settings-sep {
-  height: 1px;
-  background: var(--hairline-strong);
-  margin: 5px 16px;
+  height: 0;
+  border-top: 1px solid var(--hairline-strong);
+  margin: 5px 0;
 }
 
 .settings-item-label {
@@ -798,6 +815,81 @@ ul { list-style: none; }
   transition: transform var(--t-fast) ease, opacity var(--t-fast) ease;
 }
 .primary-btn:active { transform: scale(0.98); opacity: 0.88; }
+
+/* ---------- 导出二次选择 Bottom Sheet ---------- */
+.export-sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 20px 12px;
+  border-bottom: 1px solid var(--hairline);
+  flex: none;
+}
+.export-sheet-title { font-size: 15.5px; font-weight: 620; color: var(--text); }
+
+/* 选择视图顶部工具条：全选（明显但不过度突出）+ 已选计数 */
+.exp-sel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px 8px;
+  flex: none;
+}
+.exp-sel-count { font-size: 12.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.exp-sel-all-btn {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(124, 92, 240, 0.10);
+  padding: 7px 16px;
+  border-radius: 999px;
+  transition: transform var(--t-fast) ease, opacity var(--t-fast) ease;
+}
+.exp-sel-all-btn:active { transform: scale(0.95); opacity: 0.85; }
+
+/* 生词勾选列表：圆角卡片条目（视觉复用每日任务 task-check 圆圈，
+   选中色改用主题紫，与任务完成的绿色区分开）
+   注：选择器带元素名提升优先级，压过 .task-check 的 color:#fff（其定义在后） */
+.exp-word-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 14px 20px;
+}
+.exp-word-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  transition: border-color var(--t-fast) ease, transform var(--t-fast) var(--ease);
+}
+.exp-word-row:active { transform: scale(0.985); }
+.exp-word-row.selected { border-color: var(--accent); }
+.exp-word-main { flex: 1; min-width: 0; }
+.exp-word { font-size: 15px; font-weight: 580; color: var(--text); letter-spacing: -0.01em; }
+.exp-word-sub { margin-top: 2px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+span.task-check.exp-check { color: transparent; } /* 未选择时不显示勾（task-check 默认 color:#fff） */
+span.task-check.exp-check.checked { background: var(--accent); border-color: var(--accent); color: #fff; }
+.exp-check svg { width: 12px; height: 12px; }
+
+/* 方式选择视图：说明文字 + 选项卡片列表（复用导出页 fmt-row 卡片样式） */
+.export-choice-sub { padding: 14px 20px 4px; font-size: 12.5px; color: var(--text-3); }
+.exp-choice-list { padding: 8px 14px calc(20px + var(--sab)); }
+
+/* 选择视图底部固定导出条 */
+.export-sel-footer {
+  flex: none;
+  padding: 10px 20px calc(16px + var(--sab));
+  border-top: 1px solid var(--hairline);
+}
+.export-sel-btn { margin-top: 0; padding: 13px; }
 
 /* ---------- Bottom Sheet ---------- */
 .sheet-overlay {
@@ -1046,8 +1138,13 @@ ul { list-style: none; }
 
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ---------- 滚动条 ---------- */
-::-webkit-scrollbar { width: 0; height: 0; }
+/* ---------- 滚动条：全局隐藏视觉，不改变滚动能力 ----------
+   - ::-webkit-scrollbar 清零：页面级 + 所有内部滚动容器（含横向）的
+     滚动条一律不渲染，触摸滑动 / 惯性滚动 / overscroll 完全不受影响
+   - scrollbar-width: none：标准属性，新版 Chromium（WebView 121+）下兜底
+   - 不使用 overflow:hidden，不改任何容器的盒模型，布局尺寸保持原样 */
+::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
+* { scrollbar-width: none; }
 
 /* ---------- 动效偏好 ---------- */
 @media (prefers-reduced-motion: reduce) {
@@ -1753,10 +1850,11 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: calc(var(--sat) + 40px) 28px calc(var(--sab) + 40px);
+  /* 状态页紧跟页头：勾 + 标题贴近页面顶部（列表长时页面整体滚动） */
+  padding: 12px 28px calc(var(--sab) + 40px);
   text-align: center;
 }
 .rv-done-check {
@@ -1773,7 +1871,7 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
   animation: rvPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .rv-done-title {
-  margin-top: 22px;
+  margin-top: 14px;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: -0.01em;
@@ -1836,6 +1934,103 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
 .rv-done .rv-btn-go {
   margin-top: 28px;
   max-width: 260px;
+}
+
+/* ---------- 完成页：今日复习记录（三态切换 + 记录列表 + 放大镜） ----------
+   行结构/字号/间距对齐查询记录页 .history-list：卡片容器 + 行内「单词最左 → 状态角标 → 放大镜最右」 */
+.rv-done-seg {
+  width: 100%;
+  max-width: 320px;
+  margin: 18px 0 12px;
+}
+
+.rv-rec-list {
+  width: 100%;
+  max-width: 320px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+/* 行 = 单词主体（最左）+ 状态角标（居右）+ 放大镜（最右），与 .history-list li 同构 */
+.rv-rec-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--hairline);
+  animation: rowIn 0.3s var(--ease) both;
+}
+.rv-rec-row:last-child { border-bottom: none; }
+
+/* 单词主体：与查询记录 .history-word 同字号字重，全部左对齐 */
+.rv-rec-item {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  padding: 13px 8px 13px 14px;
+}
+.rv-rec-word {
+  font-size: 15px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 状态角标：绿 = 认识/正确，黄 = 模糊，红 = 不认识/错误/需强化/跳过 */
+.rv-rec-tag {
+  flex: none;
+  margin-left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.rv-rec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.rv-rec-tag--green { color: #1d8a41; background: rgba(52, 199, 89, 0.13); }
+.rv-rec-tag--yellow { color: #a86a00; background: rgba(255, 149, 0, 0.15); }
+.rv-rec-tag--red { color: #d32f2f; background: rgba(255, 59, 48, 0.12); }
+
+/* 放大镜：与 .speaker-btn 同规格的圆形图标按钮，固定最右 */
+.rv-rec-lookup {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-right: 8px;
+  border-radius: 50%;
+  color: var(--text-3);
+  transition: background var(--t-fast) ease, color var(--t-fast) ease, transform var(--t-fast) var(--ease);
+}
+.rv-rec-lookup:active { background: var(--hairline); color: var(--text); transform: scale(0.9); }
+.rv-rec-lookup svg { width: 16px; height: 16px; }
+
+.rv-rec-empty {
+  padding: 22px 14px;
+  font-size: 13px;
+  color: var(--text-3);
+  text-align: center;
 }
 
 /* ================================================================
@@ -2054,7 +2249,8 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
   .rv-detail { padding-top: calc(var(--sat) + 56px); }
   .rv-detail-senses { margin-top: 16px; }
   .rv-detail-actions { padding-bottom: calc(var(--sab) + 18px); }
-  .rv-transition, .rv-done { justify-content: flex-start; padding-top: calc(var(--sat) + 52px); }
+  .rv-transition { justify-content: flex-start; padding-top: calc(var(--sat) + 52px); }
+  .rv-done { justify-content: flex-start; padding-top: 12px; }
 }
 
 /* 动效偏好：关闭全部复习动画 */
@@ -2183,10 +2379,12 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
 .pomo-btn-pause { background: var(--accent); }
 .pomo-btn-close { background: var(--surface-2); color: var(--text-2); }
 
-/* 横屏：电子闹钟式，倒计时保持屏幕绝对中心，字号按高度适配 */
+/* 横屏：电子闹钟式，倒计时保持屏幕绝对中心，字号按高度适配。
+   运行视图极度克制仅保留时间与按钮；但关闭确认层（.pomo-confirm）与竖屏完全一致，文案照常显示 */
 @media (orientation: landscape) {
   .pomo-time { font-size: clamp(56px, 20vh, 170px); }
-  .pomo-phase, .pomo-task-label { display: none; } /* 横屏极度克制，仅保留时间与按钮 */
+  .pomo-full:not(.pomo-confirm) .pomo-phase,
+  .pomo-full:not(.pomo-confirm) .pomo-task-label { display: none; }
   .pomo-actions { margin-top: 36px; }
 }
 
@@ -2698,3 +2896,183 @@ html[data-theme="dark"] .reward-icon { background: rgba(245, 158, 11, 0.15); col
   html[data-theme="system"] .goal-icon { background: rgba(139, 92, 246, 0.16); color: #A78BFA; }
   html[data-theme="system"] .reward-icon { background: rgba(245, 158, 11, 0.15); color: #FBBF24; }
 }
+
+/* ============================================================
+   数据管理确认弹窗（JSON 导入确认 · js/data-manager.js）
+   跟随主题变量：浅色/深色/跟随系统自动适配
+   ============================================================ */
+.vh-dlg-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: var(--scrim-blur);
+  -webkit-backdrop-filter: var(--scrim-blur);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-med) ease;
+  z-index: 95;
+}
+.vh-dlg-overlay.show { opacity: 1; pointer-events: auto; }
+
+.vh-dlg {
+  width: min(340px, 100%);
+  max-height: 78dvh;
+  overflow-y: auto;
+  background: var(--surface);
+  border-radius: 18px;
+  box-shadow: 0 18px 48px rgba(17, 24, 39, 0.18);
+  padding: 22px 20px 16px;
+  transform: translateY(14px) scale(0.97);
+  transition: transform var(--t-med) var(--ease);
+}
+.vh-dlg-overlay.show .vh-dlg { transform: translateY(0) scale(1); }
+
+.vh-dlg-title {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 10px;
+}
+.vh-dlg-body { font-size: 13.5px; color: var(--text-2); }
+.vh-dlg-sub { margin: 0 0 8px; }
+.vh-dlg-list {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+}
+.vh-dlg-list li { font-size: 12.5px; color: var(--text); }
+.vh-dlg-warn { font-size: 12px; color: #D97706; margin: 4px 0; }
+.vh-dlg-note { font-size: 12px; color: var(--text-3); margin: 8px 0 0; }
+
+.vh-dlg-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.vh-dlg-btn {
+  flex: 1;
+  height: 42px;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 14.5px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform var(--t-fast) ease, opacity var(--t-fast) ease;
+}
+.vh-dlg-btn:active { transform: scale(0.97); opacity: 0.85; }
+.vh-dlg-btn.primary { background: var(--accent); color: #FFFFFF; }
+.vh-dlg-btn.danger { background: var(--accent); color: #FFFFFF; }
+
+/* ---------- 单词笔记（单词详情底部板块） ---------- */
+.word-note {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  text-align: left;
+}
+.word-note .section-title { display: block; margin-bottom: 8px; }
+
+.word-note-box { position: relative; }
+
+/* 胶囊输入框：多行、随内容自动增高，上限 120px 后内部滚动 */
+.word-note-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 1px solid var(--hairline);
+  border-radius: 18px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.5;
+  padding: 9px 40px 9px 14px;
+  min-height: 38px;
+  max-height: 120px;
+  overflow-y: auto;
+  transition: border-color var(--t-fast) ease;
+}
+.word-note-input:focus { outline: none; border-color: var(--accent); }
+.word-note-input::placeholder { color: var(--text-3); }
+
+/* 展开入口：仅当内容超出胶囊可展示范围时显示（.has-overflow） */
+.word-note-expand {
+  position: absolute;
+  right: 7px;
+  top: 7px;
+  width: 26px;
+  height: 26px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-3);
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  transition: transform var(--t-fast) var(--ease);
+}
+.word-note-box.has-overflow .word-note-expand { display: inline-flex; }
+.word-note-expand:active { transform: scale(0.9); color: var(--accent); }
+.word-note-expand svg { width: 14px; height: 14px; }
+
+/* ---------- 二级笔记页（全屏覆盖层，关闭即回到原详情页） ---------- */
+.note-page {
+  position: fixed;
+  inset: 0;
+  z-index: 320;
+  background: var(--bg);
+  animation: pageIn var(--t-med) var(--ease);
+}
+.note-page-panel {
+  height: 100%;
+  max-width: 430px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.note-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(var(--sat) + 10px) 16px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+.note-page-back {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--accent);
+  flex: none;
+}
+.note-page-back:active { background: var(--hairline); }
+.note-page-back svg { width: 18px; height: 18px; }
+.note-page-word { font-size: 16px; font-weight: 650; letter-spacing: -0.01em; color: var(--text); line-height: 1.3; }
+.note-page-sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.note-page-input {
+  flex: 1;
+  width: 100%;
+  border: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14.5px;
+  line-height: 1.65;
+  padding: 16px 20px calc(var(--sab) + 24px);
+}
+.note-page-input:focus { outline: none; }
+.note-page-input::placeholder { color: var(--text-3); }

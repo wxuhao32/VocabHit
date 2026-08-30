@@ -34,6 +34,8 @@ public class ReminderReceiver extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         final Context c = context == null ? null : context.getApplicationContext();
         if (c == null) return;
+        android.util.Log.d("VHReminder", "onReceive action="
+                + (intent == null ? "null" : intent.getAction()));
 
         // 用户已关闭提醒：取消计划后直接返回（兜底，正常情况下设置变更时已取消）
         if (!ReminderPrefs.isEnabled(c)) {
@@ -63,15 +65,24 @@ public class ReminderReceiver extends BroadcastReceiver {
 
     private static void checkAndNotify(Context c) {
         // 系统通知被用户关闭：不打扰（计划仍在，用户重新授权后自动恢复）
-        if (!androidx.core.app.NotificationManagerCompat.from(c).areNotificationsEnabled()) return;
+        if (!androidx.core.app.NotificationManagerCompat.from(c).areNotificationsEnabled()) {
+            android.util.Log.d("VHReminder", "check skipped: notifications disabled in system");
+            return;
+        }
 
         ReminderState st = ReminderState.parse(ReminderPrefs.getSnapshot(c));
-        if (!st.valid) return; // 从未同步过状态（例如刚装 App）→ 不发没有依据的提醒
+        if (!st.valid) { // 从未同步过状态（例如刚装 App）→ 不发没有依据的提醒
+            android.util.Log.d("VHReminder", "check skipped: no valid snapshot");
+            return;
+        }
 
         long now = System.currentTimeMillis();
 
         // 状态一：今日单词未复习（与前端 reviewQueue() 同口径）
-        if (st.dueCount(now) > 0) {
+        int due = st.dueCount(now);
+        android.util.Log.d("VHReminder", "check: dueWords=" + due
+                + " taskIncomplete=" + st.taskIncomplete(ReminderState.bizDay(now)));
+        if (due > 0) {
             post(c, ID_REVIEW, "今日单词还未复习，快去复习单词吧！", ReminderScheduler.GO_REVIEW);
         }
 
@@ -85,6 +96,7 @@ public class ReminderReceiver extends BroadcastReceiver {
         ensureChannel(c);
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null) return;
+        android.util.Log.d("VHReminder", "post id=" + id + " text=" + text);
 
         Intent it = new Intent(c, MainActivity.class);
         it.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -116,7 +128,8 @@ public class ReminderReceiver extends BroadcastReceiver {
         } catch (Throwable ignored) { }
     }
 
-    private static void ensureChannel(Context c) {
+    /** 渠道创建（package 级可调）：MainActivity 启动时预创建，发通知前兜底再查一次 */
+    static void ensureChannel(Context c) {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
         if (nm == null || nm.getNotificationChannel(CHANNEL_ID) != null) return;

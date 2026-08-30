@@ -3,6 +3,7 @@ package com.wxh.vocabulary;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
@@ -15,6 +16,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.PowerManager;
 import android.media.AudioAttributes;
 import android.os.Handler;
 import android.os.Looper;
@@ -53,21 +55,30 @@ import java.util.Locale;
  * 前端全部位于 assets/www，离线运行；localStorage 承担数据持久化。
  * AndroidBridge：
  *   exportFile(name, fmt, html)          导出 pdf / word / png（Word 与模板回退路径）
+ *   exportTextFile(name, mime, content)  文本文件导出（JSON 备份 / Word MHTML）
+ *   pickJsonFile()                       选择 JSON 备份文件（导入，结果回传 __onJsonPicked）
  *   exportPdfImages(name, dataUrlsJson)  线条小狗模板多页 PDF（前端逐页 JPEG）
  *   exportImageFile(name, dataUrl)       线条小狗模板长图 PNG
  *   setSystemBarsDark(dark)              状态栏/导航栏图标随主题
+ *   getSystemDark()                      系统当前是否深色模式（前端「跟随系统」主题用）
  *   canDrawOverlays() / requestOverlayPermission() / setOverlayEnabled(on)
  *                                        后台悬浮查词（系统级 Overlay）
  *   setReminder(on, hour, minute)        通知提醒：用户设置变更（必要时请求通知权限）
  *   syncReminder()                       通知提醒：按已保存设置恢复计划（启动/回前台）
+ *   syncReminderState(on, h, m)          通知提醒：启动时前端设置静默下发（强制两端对齐）
  *   updateReminderState(json)            通知提醒：接收前端任务/复习状态快照
  *   hasNotificationPermission() / openNotificationSettings()
  *                                        通知权限查询与跳转系统设置
+ *   hasExactAlarmPermission() / openExactAlarmSettings()
+ *                                        精确闹钟权限查询与跳转「闹钟和提醒」授权页（Android 12+）
+ *   isIgnoringBatteryOptimizations() / requestIgnoreBatteryOptimizations()
+ *                                        电池优化豁免查询与系统对话框申请
  */
 public class MainActivity extends Activity {
 
     private WebView webView;
     private String[] pendingExport; // name, fmt, html（旧系统等待权限后重试）
+    private String[] pendingTextExport; // name, mime, content（文本导出等待权限后重试）
     private int lastInsetTop = -1, lastInsetBottom = -1, lastInsetIme = 0; // 最近一次安全区（页面加载后重放）
     private TextToSpeech tts; // 单词读音（系统 TTS）
     private volatile boolean ttsReady = false; // 引擎初始化成功（语言回退后仍可用）
@@ -103,6 +114,10 @@ public class MainActivity extends Activity {
         webView.getSettings().setSupportZoom(false);
         webView.getSettings().setBuiltInZoomControls(false);
         webView.getSettings().setDisplayZoomControls(false);
+        // 视觉隐藏 WebView 原生滚动条（纵/横）：仅不渲染指示条，
+        // 页面滑动、惯性滚动、触摸滚动行为均不受影响
+        webView.setVerticalScrollBarEnabled(false);
+        webView.setHorizontalScrollBarEnabled(false);
         // 首帧透明期：文档绘制前 WebView 直接透出窗口底色（#F7F8FA，与闪屏同色），
         // 部分设备渲染器初始帧不遵守 setBackgroundColor 会出现白闪；透明后用户所见恒为窗口底色。
         // 文档绘制完成（onPageFinished）后恢复不透明背景，不影响后续页面切换/过度滚动观感
@@ -141,13 +156,43 @@ public class MainActivity extends Activity {
         });
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         setContentView(webView);
-        PDFBoxResourceLoader.init(getApplicationContext()); // PDFBox 字体资源从 APK 加载（PDF 文本层解析前置条件）
         setupEdgeToEdge();
+        pendingGo = readGoExtra(getIntent()); // 通知点击（App 未打开时的冷启动）的落地页
+        // loadUrl 尽早发起：前端启动闪屏的等待从这一刻开始计时，
+        // 下方非关键初始化不再挡在页面加载之前
+        webView.loadUrl("file:///android_asset/www/index.html");
+
+        // PDFBox 字体资源从 APK 加载（仅导出 PDF 需要）：初始化涉及资源扫描，
+        // 移到后台线程，不占用首页加载窗口；远早于用户可能触发导出的时刻完成
+        new Thread(() -> PDFBoxResourceLoader.init(getApplicationContext()), "VH-PdfBoxInit").start();
+
         // 通知提醒：每次进程启动都按已保存设置校正一次计划
         // （兜住 BOOT_COMPLETED 被 ROM 拦截、应用更新、用户修改系统时间等场景）
+        ReminderReceiver.ensureChannel(this); // 渠道预创建：部分 ROM 丢弃未建渠道的通知，不等首次发通知
         ReminderScheduler.syncFromPrefs(this);
-        pendingGo = readGoExtra(getIntent()); // 通知点击（App 未打开时的冷启动）的落地页
-        webView.loadUrl("file:///android_asset/www/index.html");
+        android.util.Log.d("VHReminder", "onCreate: syncFromPrefs on="
+                + ReminderPrefs.isEnabled(this) + " "
+                + ReminderPrefs.getHour(this) + ":" + ReminderPrefs.getMinute(this));
+    }
+
+    /** 系统当前是否深色模式（uiMode 夜间位）。Manifest 已把 uiMode 声明进 configChanges，
+        系统深色切换时走 onConfigurationChanged 而不重建 Activity，此处每次现读现返回。 */
+    private boolean isSystemDark() {
+        int mode = getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK;
+        return mode == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    /** 系统深色模式变化（uiMode 在 configChanges 中，Activity 不重建）：
+        通知前端重解析主题；前端仅在「跟随系统」时生效，手动浅色/深色不受影响 */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (webView != null) {
+            runOnUiThread(() -> webView.evaluateJavascript(
+                    "window.__onSystemThemeChanged&&window.__onSystemThemeChanged("
+                            + isSystemDark() + ")", null));
+        }
     }
 
     /* ---------- 通知提醒：通知点击 → 进入对应页面 ---------- */
@@ -194,6 +239,12 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         OverlayService.requestVisibility(this, overlayInApp);
+        // 回前台重发一次系统主题：兜住后台期间错过 uiMode 变化（页面未就绪时为 no-op）
+        if (webView != null) {
+            runOnUiThread(() -> webView.evaluateJavascript(
+                    "window.__onSystemThemeChanged&&window.__onSystemThemeChanged("
+                            + isSystemDark() + ")", null));
+        }
     }
 
     @Override
@@ -222,6 +273,15 @@ public class MainActivity extends Activity {
     private void setupEdgeToEdge() {
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        // 刘海/挖孔区域：允许内容延伸进刘海。默认 MODE_DEFAULT 在隐藏状态栏后仍保留刘海区
+        // （渲染成顶部黑边，横屏整条 letterbox 更明显）；ALWAYS 才能实现真全屏沉浸，横竖屏均生效
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = (Build.VERSION.SDK_INT >= 30)
+                    ? android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                    : android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+        }
         // 布局延伸至状态栏与导航栏下方（真全屏，无白边）
         getWindow().getDecorView().setSystemUiVisibility(
                 View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -448,6 +508,30 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> startExport(name, fmt, html));
         }
 
+        /** 文本文件导出（JSON 备份 / Word MHTML 等）：name 含扩展名，内容原样保存（不加 BOM） */
+        @JavascriptInterface
+        public void exportTextFile(final String name, final String mime, final String content) {
+            runOnUiThread(() -> startTextExport(name, mime, content));
+        }
+
+        /** JSON 备份文件选择（设置 → 导入 JSON）：结果经 window.__onJsonPicked(text|null) 回传 */
+        @JavascriptInterface
+        public void pickJsonFile() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    it.addCategory(Intent.CATEGORY_OPENABLE);
+                    it.setType("*/*"); // 部分机型对 application/json 的过滤不可靠，放宽后由内容判定
+                    it.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                            "application/json", "text/plain", "application/octet-stream"});
+                    startActivityForResult(it, REQ_PICK_JSON);
+                } catch (Exception e) {
+                    toast("无法打开文件选择器");
+                    emitJsonPicked(null);
+                }
+            });
+        }
+
         /** 线条小狗模板多页 PDF：前端已把每页渲染为 JPEG（dataURL 数组），
             原生直接拼装 PdfDocument 存入 Downloads，不再弹系统打印对话框 */
         @JavascriptInterface
@@ -508,6 +592,13 @@ public class MainActivity extends Activity {
                 if (webViewBgRestored) webView.setBackgroundColor(dark ? Color.parseColor("#131315") : Color.parseColor("#F7F8FA"));
                 // 首帧透明期内保持透明（由 onPageFinished 按 darkBg 统一恢复），避免破坏无缝启动
             });
+        }
+
+        /** 系统当前是否深色模式：前端「跟随系统」主题的真实数据源
+            （WebView 的 prefers-color-scheme 在部分 ROM 上恒报浅色，不可靠） */
+        @JavascriptInterface
+        public boolean getSystemDark() {
+            return isSystemDark();
         }
 
         /* ---------- 单词读音（系统 TTS；speakTimes 连续播放 times 次，前端无需回调） ---------- */
@@ -666,6 +757,40 @@ public class MainActivity extends Activity {
             ReminderPrefs.saveSnapshot(MainActivity.this, json);
         }
 
+        /** 启动时前端把本地设置静默下发：落盘 + 排程/取消，不申请任何权限。
+            目的：强制原生 SharedPreferences 与前端 localStorage 对齐 ——
+            升级安装、清除应用数据、历史桥调用失败等都会造成失配，
+            失配时仅靠 syncReminder()（按原生存的设置排程）会永远排不出闹钟。 */
+        @JavascriptInterface
+        public void syncReminderState(final boolean on, final int hour, final int minute) {
+            ReminderPrefs.save(MainActivity.this, on, hour, minute);
+            if (on) ReminderScheduler.schedule(MainActivity.this, hour, minute);
+            else ReminderScheduler.cancel(MainActivity.this);
+        }
+
+        /** 是否已被用户豁免电池优化（未豁免时后台/被杀后的闹钟可能被系统推迟或拦截；
+            排程本身用 setAlarmClock 闹钟型注册，无精确闹钟权限要求） */
+        @JavascriptInterface
+        public boolean isIgnoringBatteryOptimizations() {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            return pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
+        }
+
+        /** 弹系统对话框申请电池优化豁免（Toasts/提醒类应用的标准申请方式） */
+        @JavascriptInterface
+        public void requestIgnoreBatteryOptimizations() {
+            runOnUiThread(() -> {
+                try {
+                    @SuppressWarnings("BatteryLife")
+                    Intent it = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            Uri.parse("package:" + getPackageName()));
+                    startActivity(it);
+                } catch (Exception e) {
+                    toast("无法打开电池优化设置");
+                }
+            });
+        }
+
         /** 系统通知是否已开启（Android 8 以下恒为开启） */
         @JavascriptInterface
         public boolean hasNotificationPermission() {
@@ -801,6 +926,22 @@ public class MainActivity extends Activity {
             });
         }
 
+        /** 应用背景：相册选图（复制降采样持久化到 filesDir/background/bg.jpg，单文件覆盖式保存） */
+        @JavascriptInterface
+        public void pickBackgroundImage() {
+            runOnUiThread(() -> {
+                try {
+                    Intent it = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    it.addCategory(Intent.CATEGORY_OPENABLE);
+                    it.setType("image/*");
+                    startActivityForResult(it, REQ_PICK_BG_IMG);
+                } catch (Exception e) {
+                    toast("无法打开相册");
+                    emitBackgroundImage(null);
+                }
+            });
+        }
+
         /** 删除不再被引用的错题图片（仅接受 mistakes 目录内的文件，其余路径直接忽略） */
         @JavascriptInterface
         public void deleteImageFile(final String path) {
@@ -843,6 +984,8 @@ public class MainActivity extends Activity {
     private static final int REQ_TAKE_PHOTO = 4103;
     private static final int REQ_PICK_MIS_IMG = 4104;  // 我的错题：相册选图
     private static final int REQ_TAKE_MIS_IMG = 4105;  // 我的错题：拍照
+    private static final int REQ_PICK_JSON = 4106;     // JSON 备份导入：文件选择
+    private static final int REQ_PICK_BG_IMG = 4107;   // 应用背景：相册选图
     private Uri photoUri = null; // 拍照临时文件 URI（OCR 完成后清理）
     private Uri misPhotoUri = null; // 错题拍照临时文件 URI（复制持久化后清理）
 
@@ -915,6 +1058,35 @@ public class MainActivity extends Activity {
             });
         }
 
+        /* JSON 备份导入：读取所选文本文件全文回传前端（校验/备份/写入全部在前端完成） */
+        if (requestCode == REQ_PICK_JSON) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                emitJsonPicked(null); // 用户取消
+                return;
+            }
+            final Uri uri = data.getData();
+            new Thread(() -> {
+                String text = null;
+                try (InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in != null) {
+                        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                        byte[] buf = new byte[8192];
+                        int n;
+                        while ((n = in.read(buf)) > 0 && bos.size() <= 16 * 1024 * 1024) bos.write(buf, 0, n);
+                        text = bos.toString("UTF-8");
+                    }
+                } catch (Exception e) {
+                    android.util.Log.e("VocabJson", "read backup failed", e);
+                }
+                final String result = text;
+                runOnUiThread(() -> {
+                    if (result == null) toast("无法读取所选文件");
+                    emitJsonPicked(result);
+                });
+            }, "json-import-read").start();
+            return;
+        }
+
         /* 我的错题图片：复制到应用私有目录持久化，再把 file:// 路径回传前端（重启 App 后仍有效） */
         if (requestCode == REQ_PICK_MIS_IMG || requestCode == REQ_TAKE_MIS_IMG) {
             final Uri uri;
@@ -958,6 +1130,45 @@ public class MainActivity extends Activity {
                 });
             }, "mis-img-copy").start();
         }
+
+        /* 应用背景图片：降采样复制到应用私有目录（单文件覆盖式保存），把 file:// 路径回传前端。
+           降采样目标高 ≤1920（9:16 全屏背景足够），避免相机原图整幅解码造成内存压力 */
+        if (requestCode == REQ_PICK_BG_IMG) {
+            final Uri uri = (resultCode == RESULT_OK && data != null) ? data.getData() : null;
+            if (uri == null) {
+                emitBackgroundImage(null); // 用户取消：前端保持现状
+                return;
+            }
+            new Thread(() -> {
+                String saved = null;
+                try {
+                    android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
+                    bounds.inJustDecodeBounds = true;
+                    java.io.InputStream bin = getContentResolver().openInputStream(uri);
+                    android.graphics.BitmapFactory.decodeStream(bin, null, bounds);
+                    if (bin != null) bin.close();
+                    int sample = 1;
+                    while (bounds.outHeight / (sample * 2) >= 1920) sample *= 2;
+                    android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                    opts.inSampleSize = sample;
+                    java.io.InputStream in = getContentResolver().openInputStream(uri);
+                    android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeStream(in, null, opts);
+                    if (in != null) in.close();
+                    if (bmp != null) {
+                        java.io.File dir = new java.io.File(getFilesDir(), "background");
+                        if (!dir.exists()) dir.mkdirs();
+                        java.io.File dst = new java.io.File(dir, "bg.jpg");
+                        java.io.OutputStream out = new java.io.FileOutputStream(dst);
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out);
+                        out.close();
+                        bmp.recycle();
+                        saved = "file://" + dst.getAbsolutePath();
+                    }
+                } catch (Exception ignored) { }
+                final String path = saved;
+                runOnUiThread(() -> emitBackgroundImage(path));
+            }, "bg-img-copy").start();
+        }
     }
 
     /** 错题图片路径注入前端：window.__onMistakeImage('file://…'|null)；null = 取消或复制失败 */
@@ -969,10 +1180,28 @@ public class MainActivity extends Activity {
         });
     }
 
+    /** 应用背景路径注入前端：window.__onBackgroundImage('file://…'|null)；null = 取消或保存失败 */
+    private void emitBackgroundImage(final String path) {
+        final String js = "window.__onBackgroundImage&&window.__onBackgroundImage("
+                + (path == null ? "null" : "'" + path.replace("'", "\\'") + "'") + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
     /** 图片 OCR 结果注入前端：window.__onImageParsed(json|null)；null = 用户取消 */
     private void emitImageParsed(final String jsonArg) {
         final String js = "window.__onImageParsed&&window.__onImageParsed("
                 + (jsonArg == null ? "null" : jsonArg) + ")";
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    /** JSON 备份文件内容注入前端：window.__onJsonPicked(text|null)；null = 取消或读取失败 */
+    private void emitJsonPicked(final String text) {
+        final String js = "window.__onJsonPicked&&window.__onJsonPicked("
+                + (text == null ? "null" : org.json.JSONObject.quote(text)) + ")";
         runOnUiThread(() -> {
             if (webView != null) webView.evaluateJavascript(js, null);
         });
@@ -1078,6 +1307,20 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 文本文件导出（JSON 备份 / Word MHTML）：内容原样保存，不加 BOM（保 MIME 结构） */
+    private void startTextExport(String name, String mime, String content) {
+        if (Build.VERSION.SDK_INT < 29
+                && checkSelfPermission("android.permission.WRITE_EXTERNAL_STORAGE")
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingTextExport = new String[]{name, mime, content};
+            requestPermissions(new String[]{"android.permission.WRITE_EXTERNAL_STORAGE"}, 2);
+            return;
+        }
+        if (name == null || name.isEmpty()) { toast("导出失败：文件名无效"); return; }
+        saveBytes(name, mime == null ? "application/octet-stream" : mime,
+                (content == null ? "" : content).getBytes(StandardCharsets.UTF_8));
+    }
+
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         super.onRequestPermissionsResult(code, perms, results);
@@ -1089,6 +1332,14 @@ public class MainActivity extends Activity {
         } else if (code == 1) {
             pendingExport = null;
             toast("需要存储权限才能导出");
+        } else if (code == 2 && pendingTextExport != null) {
+            String[] p = pendingTextExport;
+            pendingTextExport = null;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+                startTextExport(p[0], p[1], p[2]);
+            } else {
+                toast("需要存储权限才能导出");
+            }
         } else if (code == REQ_POST_NOTIFICATIONS) {
             // 通知权限：授予 → 按用户设定的时间排程；拒绝 → 不排程，由前端把开关复位
             final int[] p = notifyPending;

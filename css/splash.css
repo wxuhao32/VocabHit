@@ -13,6 +13,12 @@
   background: var(--bg);
 }
 
+/* 启动等待期 / 字母掉落动画同样不显示任何滚动条
+   （全局规则在 style.css，此处对闪屏作用域再做显式声明兜底） */
+#splash, #splash * { scrollbar-width: none; }
+#splash::-webkit-scrollbar,
+#splash *::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
+
 /* 最终排列 = 正常文档流排版：字母落位即拼成完整品牌词，
    间距/字重/字距与首页 .large-title 一致，任何屏幕尺寸天然居中 */
 .splash-word {

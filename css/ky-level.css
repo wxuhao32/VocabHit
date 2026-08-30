@@ -5,37 +5,55 @@
    - 柔和、低饱和，适配 VocabHit 暖色 UI，辅助记忆而非荧光笔效果。
    - .ky-ob 「僻」字角标：极小、仅作辅助提示，不抢释义视觉重点。
    - 词典详情页与 Review 各界面共用同一套等级色（数据属性 → 一致渲染）。
+   - 等级色以 CSS 变量为唯一来源：类名只引用变量，导出（Canvas 模板 /
+     Word HTML）经 js/ky-level.js 的 KY.levelColors() 读取同一变量，
+     保证 App 内显示与 PDF / PNG / Word 导出颜色完全一致。
    ============================================================ */
 
-/* 常见、通用释义 → 柔和绿 */
-.ky-lv-common { color: #3F8E5C; }
-/* 一般常见释义 → 柔和琥珀黄 */
-.ky-lv-normal { color: #A6782B; }
-/* 少见、生僻、冷门释义 → 柔和灰 */
-.ky-lv-rare   { color: #87909F; }
+/* ---------- 等级色变量（App 内显示的唯一来源） ----------
+   导出（Canvas 模板 / Word HTML）经 js/ky-level.js 的 EXPORT_COLORS
+   取固定浅色态同值（导出纸面恒为浅色，不随主题）；改色请两处同步。 */
+:root {
+  /* 常见、通用释义 → 柔和绿 */
+  --ky-lv-common: #3F8E5C;
+  /* 一般常见释义 → 柔和琥珀黄 */
+  --ky-lv-normal: #A6782B;
+  /* 少见、生僻、冷门释义 → 柔和灰 */
+  --ky-lv-rare: #87909F;
+  /* 「僻」字角标：极小、陶土色，不抢释义视觉重点 */
+  --ky-ob: #B8846E;
+}
 
-/* 「僻」字角标：极小、陶土色，不抢释义视觉重点 */
+/* ---------- 深色模式（显式 data-theme="dark"） ---------- */
+html[data-theme="dark"] {
+  --ky-lv-common: #6DC693;
+  --ky-lv-normal: #DBB05A;
+  --ky-lv-rare: #96A0AF;
+  --ky-ob: #D6A58E;
+}
+
+/* ---------- 跟随系统深色（data-theme="system"） ---------- */
+@media (prefers-color-scheme: dark) {
+  html[data-theme="system"] {
+    --ky-lv-common: #6DC693;
+    --ky-lv-normal: #DBB05A;
+    --ky-lv-rare: #96A0AF;
+    --ky-ob: #D6A58E;
+  }
+}
+
+/* ---------- 类名：引用变量 ---------- */
+.ky-lv-common { color: var(--ky-lv-common); }
+.ky-lv-normal { color: var(--ky-lv-normal); }
+.ky-lv-rare   { color: var(--ky-lv-rare); }
+
 .ky-ob {
   margin-left: 1px;
   font-size: 0.52em;
   font-weight: 600;
   line-height: 1;
   vertical-align: super;
-  color: #B8846E;
-}
-
-/* ---------- 深色模式（显式 data-theme="dark"） ---------- */
-html[data-theme="dark"] .ky-lv-common { color: #6DC693; }
-html[data-theme="dark"] .ky-lv-normal { color: #DBB05A; }
-html[data-theme="dark"] .ky-lv-rare   { color: #96A0AF; }
-html[data-theme="dark"] .ky-ob        { color: #D6A58E; }
-
-/* ---------- 跟随系统深色（data-theme="system"） ---------- */
-@media (prefers-color-scheme: dark) {
-  html[data-theme="system"] .ky-lv-common { color: #6DC693; }
-  html[data-theme="system"] .ky-lv-normal { color: #DBB05A; }
-  html[data-theme="system"] .ky-lv-rare   { color: #96A0AF; }
-  html[data-theme="system"] .ky-ob        { color: #D6A58E; }
+  color: var(--ky-ob);
 }
 
 /* ---------- MCQ 答题反馈状态 ----------

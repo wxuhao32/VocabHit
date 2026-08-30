@@ -1193,3 +1193,37 @@ mark.kn-kw {
 
 .mis-expand-ta:focus { outline: none; border-color: var(--accent); }
 .mis-expand-ta::placeholder { color: var(--text-3); }
+
+/* ---------- 编辑操作（与删除按钮统一视觉风格） ---------- */
+
+/* Repository 条目卡片底部：编辑 + 删除 并列 */
+.rp-foot-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rp-edit { color: var(--accent); }
+
+/* 错题详情：编辑 + 删除 并列（删除按钮原有 margin-top 移至容器统一控制） */
+.misdet-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.misdet-actions .misdet-del { margin-top: 0; }
+
+.misdet-edit {
+  padding: 9px 18px;
+  border-radius: 99px;
+  border: 1px solid var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  transition: all var(--t-fast) ease;
+}
+
+.misdet-edit:active { transform: scale(0.97); opacity: 0.9; }

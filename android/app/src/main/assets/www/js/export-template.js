@@ -6,6 +6,9 @@
    Canvas 测量排版（自动换行/自动测高/整条不拆分/贪婪紧凑装填）
    → 页内纵向均布（词条少时拉开间距并整体居中，不挤在顶部）→ 逐页绘制
    → 零依赖 PDF 装配（JPEG 页面嵌入）。
+   释义行支持富文本分段（{segs:[{t,c?,sup?}]}：逐条释义等级着色 +
+   「僻」缩小上标，属性由 ky-level.js 按同一分级数据给出）；
+   字符串行保持原有纯文本渲染。
    挂载 window.VH_ExportTemplate；模板图缺失时返回 null，
    由 app.js 回退现有 HTML 导出路径。
    ============================================================ */
@@ -58,44 +61,86 @@
 
   /* ---------- 文本换行 ---------- */
 
-  /* 按词元断行：拉丁文本按单词、CJK 按字符，任意位置可折行。
-     ctx 需预先设置好对应 font，maxW 为板块内容宽度 */
-  function wrapText(ctx, text, maxW) {
-    const s = String(text == null ? "" : text);
-    if (!s) return [];
+  /* 释义行支持富文本：字符串行（纯正文色，兼容旧数据）或
+     { segs: [{t, c?, sup?}] } 分段行（c=颜色，sup=「僻」缩小上标）。
+     分级与颜色由调用方（js/ky-level.js KY.exportLines，复用 kyLevel
+     同一等级数据与 CSS 变量色）给出，本模块只做通用富文本排版渲染，
+     不感知任何分级规则。 */
+
+  /* 行 → token 流：按空格与 CJK/拉丁边界切分，token 携带颜色/上标属性 */
+  function lineTokens(line) {
+    const segs = line && Array.isArray(line.segs) ? line.segs : [{ t: String(line == null ? "" : line) }];
     const tokens = [];
-    for (const part of s.split(" ")) {
-      if (!part) continue;
+    for (const seg of segs) {
+      const s = String(seg.t == null ? "" : seg.t);
       let run = "", prevCJK = null;
-      for (const ch of part) {
+      const flush = () => { if (run) { tokens.push({ t: run, c: seg.c, sup: seg.sup }); run = ""; } };
+      for (const ch of s) {
+        if (ch === " ") { flush(); tokens.push({ t: " ", c: seg.c, sup: seg.sup }); prevCJK = null; continue; }
         const cjk = /[\u2E80-\uFFFD\u3000-\u303F]/.test(ch);
-        if (prevCJK !== null && (cjk || prevCJK)) {
-          if (run) tokens.push(run);
-          run = ch;
-        } else {
-          run += ch;
-        }
+        if (prevCJK !== null && (cjk || prevCJK)) flush();
+        run += ch;
         prevCJK = cjk;
       }
-      if (run) tokens.push(run);
+      flush();
     }
+    return tokens;
+  }
+
+  /* token 测量：上标（僻）按 0.52em（与 .ky-ob font-size 一致） */
+  function tokenFont(sPx, sup) {
+    return sup ? `600 ${(sPx * 0.52).toFixed(2)}px ${TPL_STYLE.fontStack}` : `${sPx}px ${TPL_STYLE.fontStack}`;
+  }
+
+  /* token 流贪婪换行：行首空格丢弃；超宽 token 按字符硬切（保留属性）；
+     「僻」上标不落单——放不下时连同其前一个 token 移到下一行 */
+  function wrapTokens(ctx, tokens, maxW, sPx) {
+    const widths = tokens.map((tok) => {
+      ctx.font = tokenFont(sPx, tok.sup);
+      return ctx.measureText(tok.t).width;
+    });
     const lines = [];
-    let cur = "";
-    for (const t of tokens) {
-      if (ctx.measureText(cur + t).width <= maxW) { cur += t; continue; }
-      if (cur) lines.push(cur);
-      if (ctx.measureText(t).width <= maxW) { cur = t; continue; }
-      let piece = ""; // 单词本身超宽 → 按字符硬切
-      for (const ch of t) {
-        if (ctx.measureText(piece + ch).width > maxW && piece) {
-          lines.push(piece);
-          piece = ch;
-        } else piece += ch;
+    let cur = []; // [{tok, w}]
+    let curW = 0;
+    // 输出 token 自带绘制宽度 w（drawEntry 直接按 w 推进 x）
+    const push = () => { if (cur.length) { lines.push(cur.map((x) => ({ t: x.tok.t, c: x.tok.c, sup: x.tok.sup, w: x.w }))); cur = []; curW = 0; } };
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      let w = widths[i];
+      if (tok.t === " ") {
+        if (curW > 0) { cur.push({ tok, w }); curW += w; } // 行首空格丢弃
+        continue;
       }
-      cur = piece;
+      if (curW + w <= maxW) { cur.push({ tok, w }); curW += w; continue; }
+      if (tok.sup && cur.length >= 2) { // 僻标记与前一个 token 一起下移
+        const prev = cur.pop();
+        curW -= prev.w;
+        push();
+        cur.push(prev, { tok, w }); curW = prev.w + w;
+        continue;
+      }
+      push();
+      if (w <= maxW) { cur.push({ tok, w }); curW = w; continue; }
+      let piece = ""; // 单 token 超宽 → 按字符硬切
+      ctx.font = tokenFont(sPx, tok.sup);
+      for (const ch of tok.t) {
+        const cw = ctx.measureText(ch).width;
+        if (curW + cw > maxW && curW > 0) {
+          cur.push({ tok: { ...tok, t: piece }, w: curW });
+          push();
+          piece = ch;
+          curW = cw;
+        } else { piece += ch; curW += cw; }
+      }
+      if (piece) { cur.push({ tok: { ...tok, t: piece }, w: curW }); }
     }
-    if (cur) lines.push(cur);
+    push();
     return lines;
+  }
+
+  /* 单行 → 换行结果（token 行数组，token 自带绘制宽度 w） */
+  function wrapRich(ctx, line, maxW, sPx) {
+    return wrapTokens(ctx, lineTokens(line), maxW, sPx);
   }
 
   /* ---------- 词条测量 ---------- */
@@ -112,7 +157,7 @@
     const phonH = pPx * 1.35;
     const senseLH = sPx * S.senseLH;
     ctx.font = `${sPx}px ${S.fontStack}`;
-    const senseLines = (entry.lines || []).map((l) => wrapText(ctx, l, contentW)).flat();
+    const senseLines = (entry.lines || []).flatMap((l) => wrapRich(ctx, l, contentW, sPx));
     let h = headH;
     if (entry.phonetic) h += S.gapWordPhon * scale + phonH;
     if (senseLines.length) h += (entry.phonetic ? S.gapPhonSense : S.gapWordPhon) * scale + senseLines.length * senseLH;
@@ -262,10 +307,17 @@
     } else if (M.senseLines.length) {
       y += S.gapWordPhon * M.scale;
     }
-    ctx.font = `${M.sPx}px ${S.fontStack}`;
-    ctx.fillStyle = S.senseColor;
+    /* 释义行：逐 token 绘制（富文本分段着色 + 「僻」缩小上标；
+       无色 token 回落正文色，纯文本行渲染效果与旧版一致） */
     for (const line of M.senseLines) {
-      ctx.fillText(line, px, y + M.sPx * 1.18);
+      let x = px;
+      for (const tok of line) {
+        ctx.font = tokenFont(M.sPx, tok.sup);
+        ctx.fillStyle = tok.c || S.senseColor;
+        const baseline = y + M.sPx * 1.18;
+        ctx.fillText(tok.t, x, tok.sup ? baseline - M.sPx * 0.5 : baseline);
+        x += tok.w;
+      }
       y += M.senseLH;
     }
   }

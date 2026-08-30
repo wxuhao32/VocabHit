@@ -291,6 +291,7 @@
     closeDialog: closeDialog,
     dialogOpened: dialogOpened,
     nameDialog: showNameDialog,
+    confirmDialog: showConfirmDialog, // 供最近实验删除复用（同一确认弹窗样式）
     saveCurrentAs: saveCurrentAs,
     updateCurrent: updateCurrent,
     summaryOf: summaryOf,
