@@ -212,9 +212,7 @@
     }
     .d-line { font-size: 13.5px; color: var(--text); line-height: 1.55; margin-top: 3px; }
     .d-meta {
-      margin-top: 10px;
-      padding-top: 9px;
-      border-top: 1px solid var(--hairline);
+      margin-top: 12px;
       font-size: 11.5px;
       color: var(--text-2);
       font-weight: 520;
@@ -235,10 +233,14 @@
     }
     .d-ext-info .ext-freq { display: inline-flex; gap: 6px; font-size: 10.5px; font-weight: 500; color: var(--text-2); }
     .d-exchange { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
+    /* 无词形变化 / 例句数据时隐藏空容器，避免只显示一条孤立分隔线（幽灵线） */
+    .d-exchange:empty, .d-examples:empty { display: none; }
     .exchange-title { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 6px; }
     .exchange-rows { display: flex; flex-wrap: wrap; gap: 6px 12px; }
     .exchange-item { display: inline-flex; align-items: center; gap: 5px; }
     .exchange-label { font-size: 10.5px; font-weight: 600; color: var(--text-2); background: rgba(127,127,127,0.12); padding: 1px 6px; border-radius: 5px; }
+    /* 与主应用一致：单词形式垂直居中时视觉略偏下，作用于 .exchange-words（flex 子项）微调上移 */
+    .exchange-words { transform: translateY(-2px); }
     .exchange-word { font-size: 12.5px; font-weight: 520; color: var(--text); }
     /* ---- 例句（考研词书，中英对照） ---- */
     .d-examples { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
@@ -631,17 +633,17 @@
     if (chips.length) parts.push(`<span class="ext-chips">${chips.join("")}</span>`);
     if (freq.length) parts.push(`<span class="ext-freq">${freq.join("")}</span>`);
     if (!parts.length) return "";
-    return `<div class="d-ext-info">${parts.join("")}</div>`;
+    return parts.join("");
   }
+  /* 注意：以下三个增强区块函数只返回【内部内容】——外层容器由 renderDetail 的模板提供。
+     若这里再包一层（<div class="d-exchange"> 等），会形成嵌套同名 div → 两层 border-top → 双分隔线。 */
   function extBlockHtml(ext) {
     const rows = exchangeRows(ext && ext.ex);
     if (!rows.length) return "";
-    return `<div class="d-exchange">
-      <div class="exchange-title">词形变化</div>
+    return `<div class="exchange-title">词形变化</div>
       <div class="exchange-rows">${rows.map((r) =>
         `<span class="exchange-item"><span class="exchange-label">${esc(r.label)}</span><span class="exchange-words">${r.words.map((w) => `<span class="exchange-word">${esc(w)}</span>`).join("")}</span></span>`
-      ).join("")}</div>
-    </div>`;
+      ).join("")}</div>`;
   }
   const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   function highlightExample(text, word, variants) {
@@ -655,12 +657,10 @@
     if (!eg || !eg.length) return "";
     const variants = [];
     exchangeRows(ext && ext.ex).forEach((r) => (r.words || []).forEach((x) => variants.push(x)));
-    return `<div class="d-examples">
-      <div class="examples-title">例句</div>
+    return `<div class="examples-title">例句</div>
       ${eg.map((e) => `<div class="example-item">
         <p class="example-en">${highlightExample(e.en, w, variants)}</p>${e.cn ? `<p class="example-cn">${esc(e.cn)}</p>` : ""}
-      </div>`).join("")}
-    </div>`;
+      </div>`).join("")}`;
   }
   /** 异步填充当前详情面板的增强区块（输入已变则作废） */
   function renderExt(w) {

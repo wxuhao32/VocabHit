@@ -391,6 +391,17 @@ html[data-theme="dark"] .home-mascot { display: none; }
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* 回前台静默重渲染（renderAllQuiet）：临时挂载于 <html>，抑制列表行入场动画
+   重播（恢复瞬间整屏从 opacity:0 重播 = 闪现 + 跳变的根源）；
+   渲染完成两帧后即移除，不影响任何正常页面进入动画 */
+html.vh-quiet-render .word-item,
+html.vh-quiet-render .history-item,
+html.vh-quiet-render .result-item,
+html.vh-quiet-render .sr-vocab-row,
+html.vh-quiet-render .sr-inq-row,
+html.vh-quiet-render .sr-pick-row,
+html.vh-quiet-render .sr-queue-row { animation: none; }
+
 .word-line { display: flex; align-items: baseline; gap: 8px; }
 .word-line.add-one-line { justify-content: space-between; }
 

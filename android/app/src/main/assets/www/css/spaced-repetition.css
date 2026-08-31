@@ -23,6 +23,66 @@
 .sr-hub-stack .review-entry + .review-entry { border-top: 1px solid var(--hairline); }
 .sr-hub-stack .review-entry:active { transform: none; background: var(--surface-2); }
 
+/* ---------- 连体卡片栈（存储库复习三级页通用，同首页「继续学习」设计语言） ---------- */
+
+.sr-card-stack {
+  margin-top: 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+/* 空栈不占位（空态由 .sr-empty 负责） */
+.sr-card-stack:empty { display: none; }
+.sr-stack-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--t-fast) ease;
+}
+.sr-stack-row + .sr-stack-row { border-top: 1px solid var(--hairline); }
+.sr-stack-row:active { background: var(--surface-2); }
+.sr-stack-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.sr-stack-icon svg { width: 21px; height: 21px; }
+.sr-stack-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sr-stack-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 620;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-stack-sub {
+  font-size: 12.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sr-stack-row .icon-s { flex: none; color: var(--text-3); }
+.sr-stack-row .sr-badge { flex: none; }
+
 .sr-sec-title {
   margin: 24px 0 10px;
   font-size: 13px;
@@ -464,20 +524,29 @@ html[data-theme="dark"] .sr-blank-chip button { background: rgba(255, 255, 255, 
 .sr-exam-prev[hidden] { display: none; }
 .sr-exam-next { flex: 1.5; background: var(--accent); color: #fff; border: none; }
 
-/* ---------- 复习队列总览 ---------- */
+/* ---------- 复习队列总览（连体卡片栈，同存储库复习页设计语言） ---------- */
 
-.sr-queue-list { display: flex; flex-direction: column; gap: 8px; }
-.sr-queue-row {
+.sr-queue-list {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px;
+  flex-direction: column;
+  margin-top: 12px;
   background: var(--surface);
   border: 1px solid var(--hairline);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
+  overflow: hidden;
 }
-.sr-queue-row.due { border-color: rgba(255, 59, 48, 0.35); }
+/* 队列空时不占位（空态由 .sr-empty 负责） */
+.sr-queue-list:empty { display: none; }
+.sr-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  background: transparent;
+}
+.sr-queue-row + .sr-queue-row { border-top: 1px solid var(--hairline); }
+.sr-queue-row.due { background: rgba(255, 59, 48, 0.04); }
 .sr-queue-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .sr-mini-btn {
   padding: 4px 10px;
@@ -494,73 +563,38 @@ html[data-theme="dark"] .sr-blank-chip button { background: rgba(255, 255, 255, 
 .sr-mini-danger { color: #FF3B30; border-color: rgba(255, 59, 48, 0.25); background: rgba(255, 59, 48, 0.06); }
 html[data-theme="dark"] .sr-mini-danger { color: #FF453A; }
 
-/* ---------- 间隔设置（存储库间隔重复规则，默认与生词 Review 一致） ---------- */
+/* ---------- 提问型：输入答案判分 ---------- */
 
-.sr-iv-list {
-  display: flex;
-  flex-direction: column;
-  margin-top: 12px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-card);
-  box-shadow: var(--shadow-card);
-}
-.sr-iv-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 11px 16px;
-  border-bottom: 1px solid var(--hairline);
-}
-.sr-iv-row:last-child { border-bottom: none; }
-.sr-iv-label { font-size: 14.5px; font-weight: 550; color: var(--text); }
-.sr-iv-field { flex: none; display: flex; align-items: center; gap: 7px; }
-.sr-iv-input {
-  width: 68px;
-  height: 36px;
+.sr-q-input {
+  display: block;
+  width: 100%;
   box-sizing: border-box;
-  text-align: center;
+  margin-top: 14px;
+  padding: 12px 14px;
   border-radius: var(--r-field);
   border: 1px solid var(--hairline);
   background: var(--surface-2);
   color: var(--text);
-  font-size: 14.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  line-height: 1.5;
   outline: none;
   transition: border-color var(--t-fast) ease, box-shadow var(--t-fast) ease;
 }
-.sr-iv-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.sr-iv-unit { font-size: 12.5px; color: var(--text-3); }
-.sr-iv-tip { margin-top: 14px; }
-.sr-iv-foot { display: flex; gap: 10px; margin-top: 18px; }
-.sr-iv-save {
-  flex: 2;
-  height: 46px;
+.sr-q-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sr-q-input::placeholder { color: var(--text-3); }
+
+.sr-q-banner {
+  margin: 12px 0 0;
+  padding: 10px 14px;
   border-radius: var(--r-field);
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  font-size: 14.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: transform var(--t-fast) ease, opacity var(--t-fast) ease;
-}
-.sr-iv-save:active { transform: scale(0.97); opacity: 0.85; }
-.sr-iv-reset {
-  flex: 1;
-  height: 46px;
-  border-radius: var(--r-field);
-  border: 1px solid var(--hairline);
-  background: var(--surface);
-  color: var(--text-2);
   font-size: 14px;
-  font-weight: 550;
-  cursor: pointer;
-  transition: transform var(--t-fast) ease, background var(--t-fast) ease;
+  font-weight: 650;
+  text-align: center;
 }
-.sr-iv-reset:active { transform: scale(0.97); background: var(--surface-2); }
+.sr-q-banner.ok { background: rgba(52, 199, 89, 0.12); color: #248A3D; }
+.sr-q-banner.bad { background: rgba(255, 59, 48, 0.1); color: #D70015; }
+html[data-theme="dark"] .sr-q-banner.ok { color: #30D158; }
+html[data-theme="dark"] .sr-q-banner.bad { color: #FF453A; }
 
 /* ---------- 知识复习（提问型 / 挖空型 / 旧数据兼容） ---------- */
 
@@ -660,13 +694,6 @@ html[data-theme="dark"] .sr-mini-danger { color: #FF453A; }
 }
 .sr-rv-content { font-size: 19px; font-weight: 650; color: var(--text); line-height: 1.5; word-break: break-word; }
 .sr-rv-src { margin-top: 8px; font-size: 13px; color: var(--text-3); line-height: 1.6; word-break: break-word; }
-.sr-rv-judged {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px dashed var(--hairline-strong);
-  font-size: 12.5px;
-  color: var(--text-3);
-}
 .sr-rv-explain { margin-top: 10px; font-size: 14.5px; color: var(--text-2); line-height: 1.65; }
 .sr-rv-context {
   margin: 12px 0 0;

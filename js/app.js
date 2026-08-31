@@ -3971,6 +3971,25 @@ function renderAll() {
   pushReminderState(); // 通知提醒：任何数据渲染路径都顺带把最新状态同步给原生
 }
 
+/** 静默重渲染：回前台等「恢复路径」专用 —— 重建 DOM 时临时挂 vh-quiet-render
+    关闭列表行入场动画（rowIn/srRowIn 的 from{opacity:0} 会在恢复瞬间整屏重播，
+    即回前台「闪现 + 跳变」的根源；入场动画只应发生在真正的页面进入时）。
+    渲染完成（两帧后）即摘除标记，不影响后续任何正常动画。 */
+let quietRenderActive = false;
+function renderAllQuiet() {
+  if (quietRenderActive) { renderAll(); return; } // 已在静默窗口内：直接渲染即可
+  quietRenderActive = true;
+  document.documentElement.classList.add("vh-quiet-render");
+  try {
+    renderAll();
+  } finally {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.documentElement.classList.remove("vh-quiet-render");
+      quietRenderActive = false;
+    }));
+  }
+}
+
 /* ---------- 页面切换 ---------- */
 
 function switchTab(name, opts) {
@@ -5828,13 +5847,19 @@ if (window.__vhSplash) window.__vhSplash.appReady();
 /* 回到前台：检查跨天重置 + 重载记录（与后台悬浮查词互通）+ 悬浮查词授权结果 */
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
+  /* 回前台防闪：先对关键字段做数据快照，仅当数据确实变化（后台悬浮查词写入、
+     跨天重置等）才重渲染；数据未变时跳过整页重建，避免列表行入场动画重播
+     造成的「组件闪现 + 回前台卡顿」。确需重渲染时走静默渲染（关闭行动画），
+     页面停留在用户离开时的状态，不闪不跳。 */
+  const resumeSig = () => JSON.stringify([records, reviewStore]);
+  const sigBefore = resumeSig();
   loadRecords(); // 后台悬浮查词可能已写入新记录
   rolloverIfNeeded();
   // 悬浮查词期间生词本已变化（新增/删除）：与启动时同样的同步流程，
   // 否则悬浮条确认的生词要等下次重启才会进入 Review 队列
   syncReviewWithWords();
   migrateReview();
-  renderAll();
+  if (resumeSig() !== sigBefore) renderAllQuiet();
   syncNotifyPermission(); // 通知提醒：权限/计划随回前台校正（含从系统通知设置页返回）
   if (overlayPending && hasBridge()) {
     overlayPending = false;

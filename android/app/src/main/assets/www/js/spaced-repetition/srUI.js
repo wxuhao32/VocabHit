@@ -1,19 +1,24 @@
 /* ============================================================
-   Spaced Repetition · 自适应间隔算法 · UI 层 v2
+   Spaced Repetition · FSRS 统一结算 · UI 层 v3
    ------------------------------------------------------------
    挂载到 window.VH_SR.ui。
-   页面层级：设置 → 自适应间隔算法(sr) →
+   页面层级：设置 → FSRS 算法(sr) →
      ├─ 生词复习计划(sr-vocab)：只读展示现有 vc-review 队列
      │    （点击单词 → 复用既有 openSheet+renderSheetDetail 释义卡片）
      └─ 存储库(sr-repo) →
-          ├─ 间隔设置(sr-intervals)：六档间隔自定义（默认与生词 Review 一致，两套算法独立）
           ├─ 库页(sr-lib)：已在队列 / 未在队列 同页 Segmented 切换（不跳页）
           │    ├─ 已在队列：点击条目 → 查看/修改考察方式(sr-exam)
           │    └─ 未在队列：圆圈批量选择 → 加入复习 → 逐条设置考察方式(sr-exam)
           ├─ 复习队列(sr-queue)：全部复习中条目总览
+          ├─ 存储库复习选择(sr-pick)：按库列出到期数量，点击某库只建该库自己的复习队列
+          │    （不同存储库的队列严格隔离，绝不混合）
           └─ 知识复习(sr-review)：提问型 / 挖空型 / 旧数据兼容三分支
+   调度底层：与生词 Review 同一套 FSRS（js/fsrs.js · window.VH_FSRS），
+   记忆状态 / 稳定性 / 难度 / 间隔计算 / 业务日队列完全同源；
+   旧「六档间隔设置」页已退役移除（数据自动迁移到 FSRS）。
    考察方式（每条知识独立）：
-     提问型：显示预设问题 → 回忆 → 记得/模糊/遗忘 → 显示预设答案
+     提问型：显示预设问题 → 用户输入答案 → 系统宽松判分（答对/答错）
+             → 显示正确答案（预设答案支持 | 分隔多个候选）
      挖空型：挖空原文（复用荧光笔「原生选区→偏移→切换」逻辑）→ 填写 → 判分
    间隔重复（什么时候考）与考察方式（怎么考）完全独立。
    隔离原则：
@@ -36,7 +41,9 @@
 
   var BACK_SVG = '<svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3L5 8l5 5"/></svg>';
   var CHEV_SVG = '<svg class="icon icon-s" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>';
-  var SR_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3.2a6.8 6.8 0 1 0 6.8 6.8"/><path d="M16.8 10V4.4M16.8 10h-5.6"/></svg>';
+  /* 存储库图标：简洁小房子（与其他功能图标同尺寸 / 线条粗细 / 圆角端点风格） */
+  var HOUSE_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.5L10 4l6.5 5.5"/><path d="M5.4 8.3V16h9.2V8.3"/><path d="M8.4 16v-3.8h3.2V16"/></svg>';
+  var LIST_SVG = '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 5.5h9M6.5 10h9M6.5 14.5h6"/><circle cx="3.6" cy="5.5" r="1" fill="currentColor" stroke="none"/><circle cx="3.6" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="3.6" cy="14.5" r="1" fill="currentColor" stroke="none"/></svg>';
   var DOC_SVG = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg>';
 
   /* ================= 只读数据访问（绝不写入既有键） ================= */
@@ -213,7 +220,7 @@
           ${CHEV_SVG}
         </button>
         <button class="review-entry" id="sr-repo-entry" type="button">
-          <span class="review-entry-icon">${SR_SVG}</span>
+          <span class="review-entry-icon">${HOUSE_SVG}</span>
           <span class="review-entry-main">
             <span class="review-entry-title">存储库</span>
             <span class="review-entry-sub" id="sr-repo-sub">当前有 0 条知识正在复习</span>
@@ -245,27 +252,35 @@
         </header>
         <p class="page-subtitle">与生词复习完全独立 · 知识条目按条独立间隔重复</p>
         <button class="primary-btn" id="sr-start-btn" type="button">开始复习</button>
-        <div class="sr-row-list">
-          <button class="sr-row" id="sr-intervals-entry" type="button">
-            <div class="sr-row-main">
-              <p class="sr-row-title">间隔设置</p>
-              <p class="sr-row-sub" id="sr-intervals-sub">1·3·7·10·20·30 天</p>
-            </div>
-            ${CHEV_SVG}
-          </button>
-          <button class="sr-row" id="sr-queue-entry" type="button">
-            <div class="sr-row-main">
-              <p class="sr-row-title">复习队列</p>
-              <p class="sr-row-sub" id="sr-queue-sub">0 条知识正在复习</p>
-            </div>
+        <div class="sr-card-stack">
+          <button class="sr-stack-row" id="sr-queue-entry" type="button">
+            <span class="sr-stack-icon">${LIST_SVG}</span>
+            <span class="sr-stack-main">
+              <span class="sr-stack-title">复习队列</span>
+              <span class="sr-stack-sub" id="sr-queue-sub">0 条知识正在复习</span>
+            </span>
             ${CHEV_SVG}
           </button>
         </div>
         <p class="sr-sec-title">选择知识加入间隔重复</p>
-        <div class="sr-row-list" id="sr-lib-list"></div>
+        <div class="sr-card-stack" id="sr-lib-list"></div>
         <div class="sr-empty" id="sr-lib-empty" hidden>
           <p>还没有存储库</p>
           <p class="sr-empty-sub">去 Knowledge 摘取内容，即可在这里选择复习</p>
+        </div>
+      </main>
+
+      <!-- 三级页：存储库复习选择（每个存储库独立复习队列，互不混合） -->
+      <main class="page" id="page-sr-pick">
+        <header class="page-header">
+          <button class="back-btn" id="sr-pick-back" type="button" aria-label="返回">${BACK_SVG}</button>
+          <h1 class="page-title">选择存储库</h1>
+        </header>
+        <p class="page-subtitle">点击存储库开始复习 · 队列只含该库知识，互不混合</p>
+        <div class="sr-card-stack" id="sr-pick-list"></div>
+        <div class="sr-empty" id="sr-pick-empty" hidden>
+          <p>还没有存储库</p>
+          <p class="sr-empty-sub">去 Knowledge 摘取内容，即可在这里开始复习</p>
         </div>
       </main>
 
@@ -291,7 +306,7 @@
 
         <div id="sr-notq-view">
           <button class="sr-select-all" id="sr-select-all" type="button">全选</button>
-          <ul class="sr-pick-list" id="sr-pick-list"></ul>
+          <ul class="sr-pick-list" id="sr-notq-list"></ul>
           <div class="sr-empty" id="sr-notq-empty" hidden>
             <p>全部条目均已加入队列</p>
             <p class="sr-empty-sub">切换到「已在队列」即可看到它们</p>
@@ -305,28 +320,6 @@
         <div class="sr-pick-bar" id="sr-pick-bar" hidden>
           <span class="sr-pick-count" id="sr-pick-count">已选 0 条</span>
           <button class="sr-pick-add" id="sr-pick-add" type="button">加入复习</button>
-        </div>
-      </main>
-
-      <!-- 四级页：间隔设置（存储库间隔重复规则，默认与生词 Review 一致） -->
-      <main class="page" id="page-sr-intervals">
-        <header class="page-header">
-          <button class="back-btn" id="sr-intervals-back" type="button" aria-label="返回">${BACK_SVG}</button>
-          <h1 class="page-title">间隔设置</h1>
-        </header>
-        <p class="page-subtitle">存储库间隔重复规则 · 默认与生词复习一致，可独立修改</p>
-        <div class="sr-iv-list">
-          <div class="sr-iv-row"><span class="sr-iv-label">第一次复习</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="0" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第一次复习间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-          <div class="sr-iv-row"><span class="sr-iv-label">第二次复习</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="1" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第二次复习间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-          <div class="sr-iv-row"><span class="sr-iv-label">第三次复习</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="2" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第三次复习间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-          <div class="sr-iv-row"><span class="sr-iv-label">第四次复习</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="3" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第四次复习间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-          <div class="sr-iv-row"><span class="sr-iv-label">第五次复习</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="4" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第五次复习间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-          <div class="sr-iv-row"><span class="sr-iv-label">第六次及以上</span><span class="sr-iv-field"><input class="sr-iv-input" data-iv="5" type="number" min="1" max="365" step="1" inputmode="numeric" autocomplete="off" aria-label="第六次及以上间隔天数"><span class="sr-iv-unit">天后</span></span></div>
-        </div>
-        <p class="sr-exam-tip sr-iv-tip">「记得」推进一档 ·「模糊」当前档减半（最少 1 天）·「遗忘」次日复习。修改仅影响后续排期，生词复习不受影响。</p>
-        <div class="sr-iv-foot">
-          <button class="sr-iv-reset" id="sr-intervals-reset" type="button">恢复默认</button>
-          <button class="sr-iv-save" id="sr-intervals-save" type="button">保存</button>
         </div>
       </main>
 
@@ -350,8 +343,8 @@
           <p class="sr-field-label">预设问题</p>
           <input class="sr-input" id="sr-exam-question" type="text" maxlength="120" autocomplete="off" placeholder="如：这个句子的核心结构是什么？">
           <p class="sr-field-label">正确答案</p>
-          <textarea class="sr-textarea" id="sr-exam-answer" rows="3" placeholder="复习时先回忆，判断后显示这里的内容"></textarea>
-          <p class="sr-exam-tip">复习流程：显示问题 → 自行回忆 → 选择「记得 / 模糊 / 遗忘」→ 显示正确答案</p>
+          <textarea class="sr-textarea" id="sr-exam-answer" rows="3" placeholder="复习时输入答案由系统判分 · 多个正确答案用 | 分隔"></textarea>
+          <p class="sr-exam-tip">复习流程：显示问题 → 输入答案 → 系统判分（忽略大小写 / 标点 / 多余空白）→ 显示正确答案</p>
         </div>
         <div id="sr-exam-c" hidden>
           <p class="sr-exam-tip sr-exam-tip-top">在下面原文中长按 / 拖选要隐藏的部分（可设置多处），复习时变为填空</p>
@@ -441,15 +434,10 @@
   function renderRepo() {
     D.loadAll();
     var c = D.counts();
-    $("#sr-intervals-sub").textContent = D.intervals().join("·") + " 天";
+    var now = Date.now();
     var startBtn = $("#sr-start-btn");
-    if (c.due > 0) {
-      startBtn.textContent = "开始复习 · " + c.due + " 条到期";
-      startBtn.disabled = false;
-    } else {
-      startBtn.textContent = c.active > 0 ? "暂无到期知识" : "还没有复习中的知识";
-      startBtn.disabled = true;
-    }
+    startBtn.textContent = c.due > 0 ? "开始复习 · " + c.due + " 条到期" : "开始复习";
+    startBtn.disabled = false;
     $("#sr-queue-sub").textContent = c.active + " 条知识正在复习" + (c.due > 0 ? " · " + c.due + " 条今天到期" : "");
 
     var ls = libs();
@@ -457,17 +445,56 @@
     $("#sr-lib-list").innerHTML = ls.map(function (l) {
       var total = entriesOf(l.id).length;
       var n = D.statesOfLibrary(l.id).length;
-      return '<button class="sr-row" data-sr-lib="' + esc(l.id) + '" type="button">' +
-        '<div class="sr-row-main">' +
-        '<p class="sr-row-title">' + esc(l.name) + (n > 0 ? ' <span class="sr-badge">' + n + " 条复习中</span>" : "") + "</p>" +
-        '<p class="sr-row-sub">共 ' + total + " 条知识" + (total > 0 && n < total ? " · " + (total - n) + " 条未加入" : "") + "</p>" +
-        "</div>" + CHEV_SVG + "</button>";
+      var due = libDueCount(l.id, now);
+      var sub = "共 " + total + " 条知识" + (n > 0 ? " · " + n + " 条复习中" : "") +
+        (total > 0 && n < total ? " · " + (total - n) + " 条未加入" : "");
+      return '<button class="sr-stack-row" data-sr-lib="' + esc(l.id) + '" type="button">' +
+        '<span class="sr-stack-icon">' + HOUSE_SVG + "</span>" +
+        '<span class="sr-stack-main">' +
+        '<span class="sr-stack-title">' + esc(l.name) + (due > 0 ? ' <span class="sr-badge">' + due + " 条到期</span>" : "") + "</span>" +
+        '<span class="sr-stack-sub">' + esc(sub) + "</span>" +
+        "</span>" + CHEV_SVG + "</button>";
     }).join("");
   }
 
   function openRepo() {
     renderRepo();
     switchTab("sr-repo");
+  }
+
+  /* ================= 存储库复习选择：每个存储库独立队列 ================= */
+
+  /** 某个存储库当前到期的知识条数（状态自带 repositoryId，天然按库区分） */
+  function libDueCount(libId, now) {
+    var t = now || Date.now();
+    return D.statesOfLibrary(libId).filter(function (s) {
+      return s.nextReviewAt > 0 && s.nextReviewAt <= t;
+    }).length;
+  }
+
+  function renderPick() {
+    D.loadAll();
+    var ls = libs();
+    $("#sr-pick-empty").hidden = ls.length > 0;
+    $("#sr-pick-list").innerHTML = ls.map(function (l) {
+      var total = entriesOf(l.id).length;
+      var due = libDueCount(l.id);
+      var sub = due > 0 ? "今日需复习 " + due + " 条"
+        : (total > 0 ? "暂无到期知识" : "还没有知识条目");
+      return '<button class="sr-stack-row" data-sr-pick-lib="' + esc(l.id) + '" type="button">' +
+        '<span class="sr-stack-icon">' + HOUSE_SVG + "</span>" +
+        '<span class="sr-stack-main">' +
+        '<span class="sr-stack-title">' + esc(l.name) + "</span>" +
+        '<span class="sr-stack-sub">' + esc(sub) + "</span>" +
+        "</span>" +
+        (due > 0 ? '<span class="sr-badge">' + due + "</span>" : CHEV_SVG) +
+        "</button>";
+    }).join("");
+  }
+
+  function openPick() {
+    renderPick();
+    switchTab("sr-pick");
   }
 
   /* ================= 库页：已在队列 / 未在队列（同页 Segmented 切换） ================= */
@@ -510,7 +537,7 @@
           '<div class="sr-inq-main">' +
           '<p class="sr-inq-content">' + esc(briefOf(x.e.content, 48)) + "</p>" +
           '<p class="sr-inq-meta"><span class="sr-badge">' + esc(D.examTypeLabel(x.st.examType)) + "</span>" +
-          "<span>" + esc(D.stageLabel(x.st)) + "</span><span>已复习 " + x.st.reviewCount + " 次</span></p>" +
+          "<span>" + esc(D.fsrsLabel(x.st)) + "</span><span>已复习 " + x.st.reviewCount + " 次</span></p>" +
           "</div>" +
           '<div class="sr-inq-side"><span class="sr-vocab-time' + (lb.due ? " due" : "") + '">' + esc(lb.text) + "</span></div>" +
           "</li>";
@@ -523,7 +550,7 @@
       var nSel = Object.keys(pickCtx.selected).filter(function (id) { return pickCtx.selected[id]; }).length;
       $("#sr-select-all").textContent = notQ.length && nSel === notQ.length ? "取消全选" : "全选";
 
-      $("#sr-pick-list").innerHTML = notQ.map(function (e, i) {
+      $("#sr-notq-list").innerHTML = notQ.map(function (e, i) {
         var st = D.stateOf(e.id);
         var on = !!pickCtx.selected[e.id];
         var catName = catNameOf(libId, e.catId);
@@ -568,7 +595,7 @@
      → 整屏闪白 + 滚动位置丢失。现改为只改对应行的勾选态与浮条计数，
      DOM 节点不换、动画不重播、滚动与其他条目状态原样保留。 */
   function pickRowOf(id) {
-    var rows = document.querySelectorAll("#sr-pick-list li[data-pick]");
+    var rows = document.querySelectorAll("#sr-notq-list li[data-pick]");
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].getAttribute("data-pick") === id) return rows[i];
     }
@@ -881,35 +908,6 @@
     }, 150);
   }
 
-  /* ================= 间隔设置（存储库间隔重复规则，默认与生词 Review 一致） ================= */
-
-  function renderIntervalsPage() {
-    var iv = D.intervals();
-    var inputs = document.querySelectorAll(".sr-iv-input");
-    for (var i = 0; i < inputs.length; i++) inputs[i].value = iv[i];
-  }
-
-  function openIntervals() {
-    renderIntervalsPage();
-    switchTab("sr-intervals");
-  }
-
-  function saveIntervals() {
-    var inputs = document.querySelectorAll(".sr-iv-input");
-    var arr = [];
-    for (var i = 0; i < inputs.length; i++) arr.push(inputs[i].value);
-    var r = D.setIntervals(arr);
-    if (r.error) { toast(r.error); return; }
-    toast("间隔设置已保存 · 后续复习按新规则排期");
-    openRepo();
-  }
-
-  function resetIntervalsUI() {
-    D.resetIntervals();
-    renderIntervalsPage();
-    toast("已恢复默认间隔（与生词复习一致）");
-  }
-
   /* ================= 复习队列总览 ================= */
 
   function renderQueue() {
@@ -929,7 +927,7 @@
       return '<li class="sr-queue-row' + (lb.due ? " due" : "") + '">' +
         '<div class="sr-row-main">' +
         '<p class="sr-row-title">' + esc(briefOf(e.content, 50)) + "</p>" +
-        '<p class="sr-row-sub">' + esc(D.examTypeLabel(st.examType)) + " · " + esc(libNameOf(st.repositoryId)) + " · " + esc(D.stageLabel(st)) + " · 已复习 " + st.reviewCount + " 次</p>" +
+        '<p class="sr-row-sub">' + esc(D.examTypeLabel(st.examType)) + " · " + esc(libNameOf(st.repositoryId)) + " · " + esc(D.fsrsLabel(st)) + " · 已复习 " + st.reviewCount + " 次</p>" +
         "</div>" +
         '<div class="sr-queue-side">' +
         '<span class="sr-vocab-time' + (lb.due ? " due" : "") + '">' + esc(lb.text) + "</span>" +
@@ -947,16 +945,20 @@
 
   /* rvSession：{ queue, idx, stats:{known,fuzzy,forgot,mastered},
                   phase("ask"|"reveal"|"fill"|"result"), lastResult,
-                  userAnswers, clozeResults } */
+                  userAnswers, clozeResults, questionAnswer（提问型用户输入） } */
   var rvSession = null;
 
-  function startReview() {
-    var due = D.dueStates();
-    if (!due.length) { toast("暂无到期知识"); return; }
+  /** 开始复习：传 libId 时只建该存储库自己的队列（到期知识按 repositoryId 严格过滤，
+      其他库的知识绝不混入；不传 libId 兼容旧入口为全量到期） */
+  function startReview(libId) {
+    var due = D.dueStates().filter(function (s) {
+      return !libId || s.repositoryId === libId;
+    });
+    if (!due.length) { toast(libId ? "该存储库暂无到期知识" : "暂无到期知识"); return; }
     if (window.VH_STATS && typeof window.VH_STATS.touch === "function") {
       try { window.VH_STATS.touch(); } catch (e) {} // 学习统计：会话开始，重置有效时长计时
     }
-    rvSession = { queue: due, idx: 0, phase: "ask", stats: { known: 0, fuzzy: 0, forgot: 0, mastered: 0 } };
+    rvSession = { queue: due, idx: 0, libId: libId || null, phase: "ask", stats: { known: 0, fuzzy: 0, forgot: 0, mastered: 0 } };
     switchTab("sr-review");
     renderReviewCard();
   }
@@ -978,8 +980,6 @@
     return html;
   }
 
-  var RESULT_LABEL = { known: "记得", fuzzy: "模糊", forgot: "遗忘" };
-
   function renderReviewCard() {
     var body = $("#sr-rv-body");
     if (!rvSession) { renderReviewDone(); return; }
@@ -999,41 +999,57 @@
       ? D.validBlanks(entry.content, state.examConfig && state.examConfig.blanks)
       : [];
 
+    // 挖空型作答阶段是 "fill"；reviewNext/startReview 统一重置为 "ask"，按卡片类型纠正
+    if (state.examType === "cloze" && blanks.length && rvSession.phase === "ask") {
+      rvSession.phase = "fill";
+    }
+
     if (state.examType === "question" && state.examConfig) renderQuestionCard(state, entry);
     else if (state.examType === "cloze" && blanks.length) renderClozeCard(state, entry, blanks);
     else renderLegacyCard(state, entry); // 旧数据兜底（未设置考察方式）
   }
 
-  /* ---- 提问型：显示问题 → 回忆 → 记得/模糊/遗忘 → 显示预设答案 → 下一条 ---- */
+  /* ---- 提问型：显示问题 → 输入答案 → 系统判分（答对=记得 / 答错=遗忘，
+         由数据层 judgeAnswer 宽松判定后统一走 FSRS 结算）→ 显示正确答案 → 下一条 ---- */
   function renderQuestionCard(state, entry) {
     var cfg = state.examConfig;
     var asking = rvSession.phase === "ask";
     var body = $("#sr-rv-body");
     var reveal = "";
     if (!asking) {
+      var ok = rvSession.lastResult === "known";
+      var answersText = D.answersOf(cfg).join(" 或 ") || String(cfg.answer || "");
       reveal = '<div class="sr-rv-answer">' +
+        '<p class="sr-q-banner ' + (ok ? "ok" : "bad") + '">' + (ok ? "✓ 回答正确" : (rvSession.dunno ? "✗ 不会 · 看看正确答案" : "✗ 回答错误")) + "</p>" +
+        '<p class="sr-rv-answer-label">你的答案</p>' +
+        '<p class="sr-rv-content">' + esc(rvSession.questionAnswer || "（未作答）") + "</p>" +
         '<p class="sr-rv-answer-label">正确答案</p>' +
-        '<p class="sr-rv-content">' + esc(cfg.answer) + "</p>" +
-        (String(cfg.answer).trim() !== String(entry.content || "").trim()
+        '<p class="sr-rv-content">' + esc(answersText) + "</p>" +
+        (answersText.trim() !== String(entry.content || "").trim()
           ? '<p class="sr-rv-src">原文：' + esc(entry.content) + "</p>" : "") +
         entryExtraHtml(entry) +
-        '<p class="sr-rv-judged">你的判断：' + RESULT_LABEL[rvSession.lastResult] + "</p>" +
         "</div>";
     }
     body.innerHTML = rvHeadHtml() +
       '<div class="sr-rv-card">' +
       '<p class="sr-rv-tag">提问型 · ' + esc(libNameOf(state.repositoryId)) + "</p>" +
       '<p class="sr-rv-prompt">' + esc(cfg.question) + "</p>" +
-      (asking ? '<p class="sr-rv-hint">先在脑中回忆答案，再选择你的记忆程度</p>' : reveal) +
+      (asking
+        ? '<input class="sr-q-input" id="sr-question-input" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="输入你的答案">'
+        : reveal) +
       "</div>" +
       (asking
         ? '<div class="sr-rv-actions">' +
-          '<button class="sr-rv-btn sr-rv-known" data-ans="known" type="button">记得</button>' +
-          '<button class="sr-rv-btn sr-rv-fuzzy" data-ans="fuzzy" type="button">模糊</button>' +
-          '<button class="sr-rv-btn sr-rv-forgot" data-ans="forgot" type="button">遗忘</button>' +
+          '<button class="sr-rv-next" id="sr-question-submit" type="button">提交答案</button>' +
+          '<button class="sr-rv-btn sr-rv-forgot" id="sr-rv-dunno" type="button">不会</button>' +
           '<button class="sr-rv-mastered" id="sr-rv-mastered" type="button">已经很熟 · 已掌握</button>' +
           "</div>"
         : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>');
+
+    if (asking) {
+      var inp = $("#sr-question-input");
+      if (inp) { try { inp.focus(); } catch (e) { /* 受限忽略 */ } }
+    }
   }
 
   /* ---- 挖空型：挖空原文 → 填写 → 系统判分 → 显示正确答案 → 下一条 ---- */
@@ -1062,7 +1078,9 @@
       var j = { correct: rvSession.clozeResults ? rvSession.clozeResults.filter(Boolean).length : 0, total: blanks.length };
       banner = j.correct === j.total
         ? '<p class="sr-cloze-banner ok">✓ 正确</p>'
-        : '<p class="sr-cloze-banner bad">✗ 错误 · 答对 ' + j.correct + " / " + j.total + " 空</p>";
+        : (rvSession.dunno
+          ? '<p class="sr-cloze-banner bad">✗ 不会 · 看看正确答案</p>'
+          : '<p class="sr-cloze-banner bad">✗ 错误 · 答对 ' + j.correct + " / " + j.total + " 空</p>");
     }
 
     var body = $("#sr-rv-body");
@@ -1076,6 +1094,7 @@
       (filling
         ? '<div class="sr-rv-actions">' +
           '<button class="sr-rv-next" id="sr-cloze-submit" type="button">提交答案</button>' +
+          '<button class="sr-rv-btn sr-rv-forgot" id="sr-rv-dunno" type="button">不会</button>' +
           '<button class="sr-rv-mastered" id="sr-rv-mastered" type="button">已经很熟 · 已掌握</button>' +
           "</div>"
         : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>');
@@ -1119,16 +1138,24 @@
     rvSession.lastResult = null;
     rvSession.userAnswers = null;
     rvSession.clozeResults = null;
+    rvSession.questionAnswer = null;
+    rvSession.dunno = false;
     renderReviewCard();
   }
 
-  /** 提问型：三按钮直接作为调度判断，随后显示答案 */
-  function answerQuestion(result) {
+  /** 提问型：提交输入答案 → 数据层宽松判分 → 答对=记得 / 答错=遗忘（FSRS 结算）→ 显示正确答案 */
+  function submitQuestion() {
     if (!rvSession || rvSession.phase !== "ask") return;
     var state = rvSession.queue[rvSession.idx];
     if (!state) return;
+    var inp = $("#sr-question-input");
+    var val = inp ? inp.value : "";
+    if (!String(val).trim()) { toast("请先输入你的答案"); return; }
+    var j = D.judgeAnswer(val, state.examConfig);
+    var result = j.correct ? "known" : "forgot";
     D.answer(state.id, result);
     rvSession.stats[result]++;
+    rvSession.questionAnswer = val;
     rvSession.lastResult = result;
     rvSession.phase = "reveal";
     renderReviewCard();
@@ -1153,6 +1180,31 @@
     rvSession.clozeResults = j.results;
     rvSession.lastResult = result;
     rvSession.phase = "result";
+    renderReviewCard();
+  }
+
+  /** 提问型 / 挖空型作答阶段：「不会」→ 按遗忘走 FSRS 结算，直接显示正确答案 */
+  function answerDunno() {
+    if (!rvSession) return;
+    var state = rvSession.queue[rvSession.idx];
+    if (!state) return;
+    var isCloze = state.examType === "cloze";
+    if (isCloze && rvSession.phase !== "fill") return;
+    if (!isCloze && rvSession.phase !== "ask") return;
+    D.answer(state.id, "forgot");
+    rvSession.stats.forgot++;
+    rvSession.lastResult = "forgot";
+    rvSession.dunno = true;
+    if (isCloze) {
+      var entry = entryById(state.id);
+      var blanks = entry ? D.validBlanks(entry.content, state.examConfig && state.examConfig.blanks) : [];
+      rvSession.userAnswers = blanks.map(function () { return ""; });
+      rvSession.clozeResults = blanks.map(function () { return false; });
+      rvSession.phase = "result";
+    } else {
+      rvSession.questionAnswer = ""; // 结果页显示「（未作答）」
+      rvSession.phase = "reveal";
+    }
     renderReviewCard();
   }
 
@@ -1213,9 +1265,9 @@
     var id = activePageId();
     if (id === "page-sr-exam") { examCancel(); return true; }
     if (id === "page-sr-review") { exitReview(); return true; }
-    if (id === "page-sr-intervals") { openRepo(); return true; }
     if (id === "page-sr-lib") { openRepo(); return true; }
     if (id === "page-sr-queue") { openRepo(); return true; }
+    if (id === "page-sr-pick") { openRepo(); return true; }
     if (id === "page-sr-repo") { openHub(); return true; }
     if (id === "page-sr-vocab") { openHub(); return true; }
     if (id === "page-sr") { switchTab("settings"); return true; }
@@ -1237,12 +1289,10 @@
       if ((el = t.closest("#sr-back"))) { switchTab("settings"); return; }
       if ((el = t.closest("#sr-vocab-back"))) { openHub(); return; }
       if ((el = t.closest("#sr-repo-back"))) { openHub(); return; }
+      if ((el = t.closest("#sr-pick-back"))) { openRepo(); return; }
       if ((el = t.closest("#sr-lib-back"))) { openRepo(); return; }
       if ((el = t.closest("#sr-exam-back"))) { examCancel(); return; }
       if ((el = t.closest("#sr-queue-back"))) { openRepo(); return; }
-      if ((el = t.closest("#sr-intervals-back"))) { openRepo(); return; }
-      if ((el = t.closest("#sr-intervals-save"))) { saveIntervals(); return; }
-      if ((el = t.closest("#sr-intervals-reset"))) { resetIntervalsUI(); return; }
 
       // 库页：已在队列 / 未在队列 同页 Segmented 切换
       if ((el = t.closest("#sr-lib-seg .seg-btn"))) {
@@ -1258,10 +1308,12 @@
       }
 
       // 存储库主页
-      if ((el = t.closest("#sr-start-btn"))) { startReview(); return; }
-      if ((el = t.closest("#sr-intervals-entry"))) { openIntervals(); return; }
+      if ((el = t.closest("#sr-start-btn"))) { openPick(); return; }
       if ((el = t.closest("#sr-queue-entry"))) { openQueue(); return; }
       if ((el = t.closest("[data-sr-lib]"))) { openLib(el.getAttribute("data-sr-lib")); return; }
+
+      // 存储库复习选择：点击某库 → 只建该库自己的复习队列
+      if ((el = t.closest("[data-sr-pick-lib]"))) { startReview(el.getAttribute("data-sr-pick-lib")); return; }
 
       // 库页：已在队列 → 修改考察方式；未在队列 → 圆圈选择
       if ((el = t.closest("[data-inq]"))) { openExamEdit(el.getAttribute("data-inq")); return; }
@@ -1313,16 +1365,27 @@
       // 复习流程
       if ((el = t.closest("#sr-rv-exit"))) { exitReview(); return; }
       if ((el = t.closest("#sr-rv-reveal"))) { revealAnswer(); return; }
+      if ((el = t.closest("#sr-question-submit"))) { submitQuestion(); return; }
       if ((el = t.closest("#sr-cloze-submit"))) { submitCloze(); return; }
+      if ((el = t.closest("#sr-rv-dunno"))) { answerDunno(); return; }
       if ((el = t.closest("#sr-rv-next"))) { reviewNext(); return; }
       if ((el = t.closest(".sr-rv-btn[data-ans]"))) {
-        // 提问型（ask 阶段：判断后显答案）与旧数据兜底（reveal 阶段）共用按钮样式
-        if (rvSession && rvSession.phase === "ask") answerQuestion(el.getAttribute("data-ans"));
-        else answerLegacy(el.getAttribute("data-ans"));
+        // 旧数据兜底（reveal 阶段自评）；提问型已改为输入判分，不再有自评按钮
+        answerLegacy(el.getAttribute("data-ans"));
         return;
       }
       if ((el = t.closest("#sr-rv-mastered"))) { markMasteredCurrent(); return; }
       if ((el = t.closest("#sr-rv-done-back"))) { openRepo(); return; }
+    });
+
+    // 提问型：输入框回车 = 提交答案
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Enter") return;
+      var t = e.target;
+      if (t && t.id === "sr-question-input" && rvSession && rvSession.phase === "ask") {
+        e.preventDefault();
+        submitQuestion();
+      }
     });
 
     // 挖空选区结束（同荧光笔：mouseup/touchend + 150ms 防抖）
