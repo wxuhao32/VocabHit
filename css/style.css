@@ -1032,12 +1032,62 @@ span.task-check.exp-check.checked { background: var(--accent); border-color: var
 
 .detail-meaning { margin-top: 10px; font-size: 15.5px; line-height: 1.5; }
 
+/* ECDICT 增强信息（考试标签 / 柯林斯星级 / 牛津3000 / 词频 + 词形变化） */
+.detail-ext-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 9px 0 0; }
+.detail-ext-info .ext-chips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.tag-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: #fff; letter-spacing: 0.02em;
+  background: linear-gradient(135deg, #4F6DF5, #7C5CFC);
+}
+.stars { color: #F59E0B; font-size: 11.5px; letter-spacing: 1px; line-height: 1; }
+.ox-chip {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: #10B981;
+  border: 1px solid currentColor; background: transparent;
+}
+.detail-ext-info .ext-freq { display: inline-flex; gap: 6px; font-size: 11px; font-weight: 500; color: var(--text-3); font-variant-numeric: tabular-nums; }
+/* 词形变化：与释义、例句之间各保留一条必要分隔线（两条边界线）。
+   线与标题之间用 padding-top 保持呼吸感，整体间距紧凑、不拥挤。 */
+.detail-exchange {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.exchange-title { font-size: 12px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 8px; }
+.exchange-rows { display: flex; flex-wrap: wrap; gap: 7px 14px; }
+.exchange-item { display: inline-flex; align-items: center; gap: 6px; }
+.exchange-label { font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--surface-2); padding: 2px 7px; border-radius: 6px; }
+/* 标签右侧的单词形式：align-items:center 按盒中心对齐，但英文单词的下伸部
+   （g/y/p 等 descender）与行盒 leading 导致视觉中心偏低，看起来"沉"在标签下方。
+   必须作用于 .exchange-words（.exchange-item 的直接 flex 子项）才有位移效果——
+   .exchange-word 是内层普通 inline span，transform 对 inline 元素无效。 */
+.exchange-words { transform: translateY(-2px); }
+.exchange-word { font-size: 13px; font-weight: 520; color: var(--text); }
+
+/* 无词形变化 / 例句数据时隐藏空容器，避免只显示一条孤立分隔线（幽灵线） */
+.detail-exchange:empty,
+.detail-examples:empty { display: none; }
+
+/* 例句（考研词书，中英对照）：与词形变化之间保留分隔线（两条必要边界线之一） */
+.detail-examples {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.examples-title { font-size: 12px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 8px; }
+.example-item { margin-bottom: 9px; }
+.example-item:last-child { margin-bottom: 0; }
+.example-en { font-size: 13.5px; line-height: 1.55; color: var(--text); }
+.example-cn { margin-top: 2px; font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+.example-hl { color: #EF4444; font-weight: 600; }
+
+/* 今日/累计 chip：此处不再需要分隔线（词形变化两侧是仅有的两条必要边界线），
+   靠间距自然过渡到笔记区，避免全页被线切割得过于零碎。 */
 .detail-meta {
   display: flex;
   gap: 8px;
   margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--hairline);
 }
 
 .meta-chip {
@@ -1339,6 +1389,28 @@ body.review-active #page-review .back-btn:active {
 /* 屏幕切换动画：翻书换页（从左向右轻翻，约 280ms，轻微克制）
    旧屏克隆为「翻出页」盖在新屏上，以左缘为轴向右轻旋揭走；新屏垫底旋入就位 */
 .rv-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* 「娴熟」毕业按钮：各复习态右上角灰色小字。
+   点击后该词彻底退出 Review 调度（FSRS 不再排期），生词本与学习历史保留。 */
+.rv-mastered {
+  position: absolute;
+  top: 6px;
+  right: 16px;
+  z-index: 3;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.12s ease;
+}
+.rv-mastered:active { opacity: 0.55; }
 
 /* 翻出页：不透明背景（与页面同色），避免翻起时透出下层新页；不响应交互 */
 .review-body > .rv-flip-out {
@@ -1748,6 +1820,7 @@ html[data-theme="dark"] .rv-btn-unknown { color: #FF6A61; }
    Phase 2: 拼写复习
    ================================================================ */
 .rv-spell {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -2188,7 +2261,12 @@ html[data-theme="dark"] .rv-mcq-option.reveal-correct {
 .rv-mcq-longpress-card .detail-word { margin-bottom: 4px; }
 .rv-mcq-longpress-card .detail-phonetic { margin-top: 4px; }
 .rv-mcq-longpress-card .detail-meaning { margin-top: 6px; }
-.rv-mcq-longpress-card .detail-meta { margin-top: 14px; }
+/* Review 长按卡片独立视觉：不受详情页「移除 .detail-meta 分隔线」影响，保持原样 */
+.rv-mcq-longpress-card .detail-meta {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline);
+}
 @keyframes mcqOverlayIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -2973,11 +3051,9 @@ html[data-theme="dark"] .reward-icon { background: rgba(245, 158, 11, 0.15); col
 .vh-dlg-btn.primary { background: var(--accent); color: #FFFFFF; }
 .vh-dlg-btn.danger { background: var(--accent); color: #FFFFFF; }
 
-/* ---------- 单词笔记（单词详情底部板块） ---------- */
+/* ---------- 单词笔记（单词详情底部板块）：不再设分隔线，靠间距过渡 ---------- */
 .word-note {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline);
+  margin-top: 18px;
   text-align: left;
 }
 .word-note .section-title { display: block; margin-bottom: 8px; }
@@ -3072,7 +3148,8 @@ html[data-theme="dark"] .reward-icon { background: rgba(245, 158, 11, 0.15); col
   font: inherit;
   font-size: 14.5px;
   line-height: 1.65;
-  padding: 16px 20px calc(var(--sab) + 24px);
+  /* 底部叠加键盘高度：键盘弹出时书写区抬升到输入法上方（窗口 ADJUST_NOTHING，仅变量让位） */
+  padding: 16px 20px calc(var(--sab) + 24px + var(--ime));
 }
 .note-page-input:focus { outline: none; }
 .note-page-input::placeholder { color: var(--text-3); }

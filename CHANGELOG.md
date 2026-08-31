@@ -1,5 +1,37 @@
 ﻿# 更新日志
 
+## v1.3.0（2026-09-01）
+
+Review 复习引擎全面迁移 FSRS + ECDICT 增强词典（含 1.2.8 / 1.2.9 中间构建的全部变更）：
+
+**一、Review 引擎迁移为 FSRS（核心）**
+- 新增 `js/fsrs.js` 纯算法模块（`window.VH_FSRS`）：FSRS-5 实现（19 参数 `w0–w18`），幂遗忘曲线 `R(t,S) = (1 + FACTOR·t/S)^DECAY`（DECAY = -0.5），参数与公式对齐 open-spaced-repetition/fsrs-rs（Anki 同源）；纯函数，不读写 localStorage、不碰 DOM。
+- 四态统一全局结算：词义回忆 / 看词选义 / 看义选词 / 拼写四种考察方式全部纳入每词唯一的 FSRS 记忆状态（`reviewStore.words[w].fsrs`：s/d/dr/reps/lapses）。三态完成时按组合评分表结算（T1）——选择题从「一票否决」降为「一票降级」（一道错 → Hard、两道错 → Again），叠加弱态惩罚；拼写完成时作为第二次证据走短期稳定性公式（T2，`countRep:false` 不重复累计轮次：对 ≈ s×1.41 / 错·跳 ≈ s×0.50）。
+- 间隔落盘：`nextAt = businessDayAt(round(intervalDays × scale))`，保持 04:00 业务日边界；`stage` 由 `stageFromInterval` 推导，仅用于兼容展示。
+- 复习日志 `vc-review-revlogs`（追加式、只增不改）：记录四态评分、组合评级、结算前后 s/d、间隔与 nextAt，同词同业务日幂等合并——自适应层的训练数据源。
+- 个性化自适应层 `vc-fsrs-adaptive`：本地拟合间隔缩放 `scale ∈ [0.5,1.5]`、期望保留率 `dr ∈ [0.85,0.95]` 与四态权重；冷启动分档（<100 条不启用 / 100–300 调 scale / 300–400 加 dr / ≥400 全量）；log_loss 回退保护（不严格改善不采纳）+ 参数钳制防过拟合；每 100 次结算或每 6 小时后台重拟合，异步不阻塞答题。
+- 旧数据无感迁移：`ensureFsrsState` 由旧阶段 / 间隔 / 三态计数推导 FSRS 状态（稳定性取旧间隔、难度按历史失败占比插值），`migrateLegacyIntervalsToFsrs` 重算未结算词的排期；旧字段原样保留，零删除零破坏。
+- 「娴熟」毕业：复习会话（词义回忆 / 详情 / 选择题 / 拼写四处入口）与词详情页可将已掌握的词标记 `mastered` 并 `nextAt` 清零，永久退出复习队列；生词本与学习历史完整保留；队列 / 计划页 / 提醒快照按 `nextAt>0` 一致过滤，迁移不复活毕业词。
+- 设置页「自适应间隔算法」更名「FSRS 算法」：生词复习计划页透明展示每词稳定性 / 难度 / 复习次数 / 遗忘次数，复习时间与 Review 实际调度严格同源（同一 `nextAt` 字段）。
+
+**二、ECDICT 增强词典（词形变化 / 考试标签 / 星级 / 词频 / 例句）**
+- 新增 27 个增强数据分片 `data/ecdict-ext-{a-z,#}.js`：词形变化（`ex`）、考试标签（`tag`：中考/高考/四级/六级/考研/托福/雅思/GRE）、柯林斯星级（`col`）、牛津3000（`ox`）、BNC/当代词频（`bnc`/`frq`）、中英例句（`eg`）。
+- `js/ecdict.js` 重构为 `createDictModule()` 工厂：`window.ECDICT`（基础：音标+释义，API 完全兼容）与 `window.ECDICT_EXT`（增强）双模块，分片懒加载 + 缓存，首次查词按需加载不阻塞启动。
+- 主应用查词详情与悬浮窗面板同步展示增强区块：考试标签渐变胶囊、柯林斯星级、牛津3000 芯片、词频、词形变化表、中英例句（单词及变形红色高亮）；异步填充，输入切换自动作废过期结果。
+- 原生桥接：`MainActivity` / `OverlayService` 新增 `readDictionaryExt(letter)`（与 `readDictionary` 共用 `readDictFile` 实现）。
+
+**三、数据备份增强**
+- `data-manager.js` 白名单新增 `vc-review-today`（Review 今日记录）、`vc-review-revlogs`（复习日志）、`vc-fsrs-adaptive`（自适应参数），随全量 JSON 备份 / 恢复迁移。
+- plain 键（`vc-theme` / `vc-overlay`）改为裸字符串读写：修复 `vc-overlay` 的 "1"/"0" 被 JSON 解析成数字、导入时被字符串校验拒绝而丢失设置的问题；兼容旧备份中以数字 / 布尔导出的 plain 键。
+
+**四、体验细节**
+- 复习答对「滴」声（`audio/next.mp3`）、答错错误提示音（`错误提示音.mp3`）；拼写回车即提交。
+- 单词笔记输入框键盘避让：聚焦自动滚入可视区。
+- 词详情页词形变化板块分隔线精简为上下两条实线。
+
+**五、版本信息**
+- 版本 1.3.0（versionCode 96）；缓存戳 `js/fsrs.js?v=2`、`js/app.js?v=45`、`js/data-manager.js?v=5`、`js/ecdict.js`、`js/spaced-repetition/srUI.js?v=9`、`css/style.css?v=34`、`css/spaced-repetition.css?v=8`；根目录与 Android assets 同步。
+
 ## v1.2.7（2026-08-30）
 
 **一、设置 · 背景项精简**

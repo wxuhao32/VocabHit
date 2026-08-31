@@ -69,7 +69,10 @@
     return "未知库";
   }
 
-  /** 生词复习计划：全部处于现有 Review 系统中的生词（只读 vc-review + vc-records） */
+  /** 生词复习计划：全部处于现有 Review 系统中的生词（只读 vc-review + vc-records）。
+      Review 生词复习的底层算法已迁移为 FSRS：nextAt 即 FSRS 调度结果，
+      本页展示的复习时间与 Review 实际调度严格同源（同一字段，不存在第二套口径）。
+      同时带出 FSRS 记忆状态（稳定性/难度/复习次数）用于透明展示。 */
   function vocabPlan() {
     var rv = readVC("vc-review"), rec = readVC("vc-records");
     var out = [];
@@ -77,11 +80,37 @@
       Object.keys(rv.words).forEach(function (w) {
         var r = rec.words[w];
         var st = rv.words[w];
-        if (r && r.starred && st && st.nextAt > 0) out.push({ word: w, nextAt: st.nextAt, stage: st.stage });
+        // nextAt > 0 同时排除了已「娴熟」毕业的词（毕业时 nextAt 清零）
+        if (r && r.starred && st && st.nextAt > 0) {
+          var f = st.fsrs || null;
+          out.push({
+            word: w,
+            nextAt: st.nextAt,
+            stage: st.stage,
+            mastered: !!st.mastered,
+            fsrs: f ? {
+              s: (typeof f.s === "number") ? f.s : null,
+              d: (typeof f.d === "number") ? f.d : null,
+              dr: f.dr,
+              reps: f.reps || 0,
+              lapses: f.lapses || 0
+            } : null
+          });
+        }
       });
     }
     out.sort(function (a, b) { return a.nextAt - b.nextAt; });
     return out;
+  }
+
+  /** FSRS 记忆状态一行文案（无 FSRS 状态时返回空串，行内不显示第二行） */
+  function fsrsLabel(f) {
+    if (!f) return "";
+    var parts = [];
+    if (typeof f.s === "number") parts.push("稳定性 " + f.s.toFixed(1) + " 天");
+    if (typeof f.d === "number") parts.push("难度 " + f.d.toFixed(1));
+    if (f.reps > 0) parts.push("已复习 " + f.reps + " 次" + (f.lapses > 0 ? " · 遗忘 " + f.lapses + " 次" : ""));
+    return parts.join(" · ");
   }
 
   /* ---------- 业务日（04:00 边界，与现有系统一致；只读计算） ---------- */
@@ -157,7 +186,7 @@
           <div class="settings-list">
             <button class="settings-item clickable" id="sr-entry" type="button">
               <div class="settings-item-label">
-                <span>自适应间隔算法</span>
+                <span>FSRS 算法</span>
                 <span class="settings-item-value">管理生词与存储库的复习计划</span>
               </div>
               <svg class="icon chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg>
@@ -171,7 +200,7 @@
       <main class="page" id="page-sr">
         <header class="page-header">
           <button class="back-btn" id="sr-back" type="button" aria-label="返回">${BACK_SVG}</button>
-          <h1 class="page-title">自适应间隔算法</h1>
+          <h1 class="page-title">FSRS 算法</h1>
         </header>
         <p class="page-subtitle">管理生词与存储库的复习计划</p>
         <div class="sr-hub-stack">
@@ -380,8 +409,12 @@
       if (lb.due) due++;
       // 属性名必须用 data-sr-word：app.js 有全局 [data-word] 点击监听（记一次查询
       // commitQuery），若复用 data-word 会污染查询统计与今日生词数据
+      var fl = fsrsLabel(v.fsrs);
       return '<li class="sr-vocab-row' + (lb.due ? " due" : "") + '" data-sr-word="' + esc(v.word) + '" style="animation-delay:' + Math.min(i, 20) * 25 + 'ms">' +
-        '<span class="sr-vocab-word">' + esc(v.word) + "</span>" +
+        '<div class="sr-vocab-main">' +
+          '<span class="sr-vocab-word">' + esc(v.word) + "</span>" +
+          (fl ? '<span class="sr-vocab-fsrs">' + esc(fl) + "</span>" : "") +
+        "</div>" +
         '<span class="sr-vocab-time' + (lb.due ? " due" : "") + '">' + esc(lb.text) + "</span>" +
         "</li>";
     }).join("");

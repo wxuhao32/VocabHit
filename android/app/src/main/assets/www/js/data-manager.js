@@ -29,6 +29,12 @@
       ok: (v) => v && typeof v === "object" && !Array.isArray(v) },
     { key: "vc-review-days", name: "Review 连续完成记录",
       ok: (v) => v && typeof v === "object" && !Array.isArray(v) },
+    { key: "vc-review-today", name: "Review 今日记录",
+      ok: (v) => v && typeof v === "object" && !Array.isArray(v) && typeof v.day === "string" && v.meaning && v.mcq && v.spell },
+    { key: "vc-review-revlogs", name: "复习日志（FSRS 自适应训练数据）",
+      ok: (v) => Array.isArray(v) },
+    { key: "vc-fsrs-adaptive", name: "FSRS 自适应参数",
+      ok: (v) => v && typeof v === "object" && !Array.isArray(v) },
     { key: "vc-stats", name: "学习统计（坚持看板）",
       ok: (v) => v && typeof v === "object" && v.days && typeof v.days === "object" },
     { key: "vc-spaced-repetition", name: "知识条目间隔重复",
@@ -65,15 +71,18 @@
 
   /* ---------- 收集 / 构建 ---------- */
 
-  /** 读取全部用户数据键。值损坏（非 JSON）时以 { __raw } 原样保留，不丢数据。 */
+  /** 读取全部用户数据键。值损坏（非 JSON）时以 { __raw } 原样保留，不丢数据。
+      plain 键（vc-theme / vc-overlay）以裸字符串读写：原样导出，绝不 JSON.parse ——
+      否则 vc-overlay 的 "1"/"0" 会被解析成数字，导入时被字符串校验器拒绝而丢失设置。 */
   function collectData() {
     const data = {};
     let n = 0;
-    USER_KEYS.forEach(({ key }) => {
+    USER_KEYS.forEach(({ key, plain }) => {
       let raw = null;
       try { raw = localStorage.getItem(key); } catch (e) { /* 忽略 */ }
       if (raw == null) return;
-      try { data[key] = JSON.parse(raw); } catch (e) { data[key] = { __raw: raw }; }
+      if (plain) data[key] = raw;
+      else { try { data[key] = JSON.parse(raw); } catch (e) { data[key] = { __raw: raw }; } }
       n++;
     });
     return { data, count: n };
@@ -146,12 +155,17 @@
     const plan = [];   // 将写入 { key, name, value }
     const bad = [];    // 校验未通过（将跳过，保留现有数据）
     const unknown = []; // 备份里有但当前版本不识别的键
-    USER_KEYS.forEach(({ key, name, ok }) => {
+    USER_KEYS.forEach(({ key, name, ok, plain }) => {
       if (!(key in obj.data)) return;
-      const v = obj.data[key];
+      let v = obj.data[key];
       // { __raw } 包裹 = 导出时已损坏的原串：原样写回，保留现场不扩大破坏
       if (v && typeof v === "object" && typeof v.__raw === "string" && Object.keys(v).length === 1) {
         plan.push({ key, name, value: v.__raw, raw: true });
+        return;
+      }
+      // 旧版备份兼容：plain 键曾以数字/布尔导出（如 vc-overlay = 1 / 0），按原串恢复
+      if (plain && (typeof v === "number" || typeof v === "boolean")) {
+        plan.push({ key, name, value: String(v), raw: false });
         return;
       }
       if (ok(v)) plan.push({ key, name, value: v, raw: false });

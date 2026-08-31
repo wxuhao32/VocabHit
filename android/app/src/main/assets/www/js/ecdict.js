@@ -1,15 +1,20 @@
 /* ============================================================
    ECDICT 通用英语兜底词典（懒加载查询层）
-   - 数据：data/ecdict-<letter>.js，按首字母分片（a-z / #），
-     每片内容形如：window.ECDICT_a={word:{p:"音标",s:"释义"}};
-   - 加载：APK 内经 AndroidBridge/AndroidOverlay.readDictionary(letter)
+   - 数据：data/ecdict-<letter>.js（基础词条，p 音标 / s 释义）、
+           data/ecdict-ext-<letter>.js（增强信息，ex 词形变化 / tag 考试标签 /
+           col 柯林斯星级 / ox 牛津3000 / bnc·frq 词频），按首字母分片（a-z / #）
+   - 加载：APK 内经 AndroidBridge/AndroidOverlay.readDictionary / readDictionaryExt
      同步读取；Web 预览回退动态 <script> 标签
    - 查询优先级：考研词书（dict.js）> ECDICT（由调用方保证）
    - 分片首次查询时按需加载并缓存，不阻塞启动
    ============================================================ */
 "use strict";
 
-window.ECDICT = (function () {
+/** 创建按字母分片 + 懒加载的词典查询模块
+    @param prefix     分片文件名前缀（"ecdict" / "ecdict-ext"）
+    @param globalVar  分片暴露的全局名（"ECDICT" / "ECDICT_EXT"，分片为 window[globalVar+"_x"]）
+    @returns {{get, getAsync, preload, isLoaded, loadedCount}} */
+function createDictModule(prefix, globalVar) {
   var cache = Object.create(null);   // letter -> 词表对象 | null（加载失败/null 也缓存）
   var pending = Object.create(null); // letter -> Promise
 
@@ -34,12 +39,18 @@ window.ECDICT = (function () {
         : typeof window.AndroidOverlay !== "undefined" && window.AndroidOverlay.readDictionary
           ? window.AndroidOverlay
           : null;
-    if (bridge) return Promise.resolve(parsePart(bridge.readDictionary(letter)));
+    if (bridge) {
+      // 增强分片优先走 readDictionaryExt；基础分片/无专方法时回退 readDictionary
+      var fn = typeof bridge.readDictionaryExt === "function"
+        ? bridge.readDictionaryExt.bind(bridge)
+        : bridge.readDictionary.bind(bridge);
+      return Promise.resolve(parsePart(fn(letter)));
+    }
     return new Promise(function (resolve) {
       var s = document.createElement("script");
-      s.src = "data/ecdict-" + letter + ".js";
+      s.src = "data/" + prefix + "-" + letter + ".js";
       s.onload = function () {
-        var data = window["ECDICT_" + letter] || null;
+        var data = window[globalVar + "_" + letter] || null;
         s.remove();
         resolve(data);
       };
@@ -90,4 +101,10 @@ window.ECDICT = (function () {
       return n;
     },
   };
-})();
+}
+
+/* 基础词典：音标 + 释义（原 window.ECDICT，API 完全兼容） */
+window.ECDICT = createDictModule("ecdict", "ECDICT");
+
+/* 增强信息：词形变化 / 考试标签 / 柯林斯星级 / 牛津3000 / 词频 */
+window.ECDICT_EXT = createDictModule("ecdict-ext", "ECDICT_EXT");

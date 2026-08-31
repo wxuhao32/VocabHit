@@ -115,11 +115,27 @@
   animation: srRowIn var(--t-med) var(--ease) both;
 }
 .sr-vocab-row:active { transform: scale(0.985); background: var(--surface-2); }
+/* 生词行主块：单词 + FSRS 记忆状态两行（min-width:0 保证长词省略号生效） */
+.sr-vocab-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
 .sr-vocab-word {
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* FSRS 记忆状态副行：稳定性 / 难度 / 复习次数（透明展示调度依据） */
+.sr-vocab-fsrs {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

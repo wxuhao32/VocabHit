@@ -219,6 +219,35 @@
       color: var(--text-2);
       font-weight: 520;
     }
+    /* ---- ECDICT 增强信息（考试标签 / 柯林斯星级 / 牛津3000 / 词频 + 词形变化） ---- */
+    .d-ext-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 8px; }
+    .d-ext-info .ext-chips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+    .tag-chip {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 10.5px; font-weight: 600; color: #fff; letter-spacing: 0.02em;
+      background: linear-gradient(135deg, #4F6DF5, #7C5CFC);
+    }
+    .stars { color: #F59E0B; font-size: 11px; letter-spacing: 1px; line-height: 1; }
+    .ox-chip {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      font-size: 10.5px; font-weight: 600; color: #10B981;
+      border: 1px solid currentColor; background: transparent;
+    }
+    .d-ext-info .ext-freq { display: inline-flex; gap: 6px; font-size: 10.5px; font-weight: 500; color: var(--text-2); }
+    .d-exchange { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
+    .exchange-title { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 6px; }
+    .exchange-rows { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+    .exchange-item { display: inline-flex; align-items: center; gap: 5px; }
+    .exchange-label { font-size: 10.5px; font-weight: 600; color: var(--text-2); background: rgba(127,127,127,0.12); padding: 1px 6px; border-radius: 5px; }
+    .exchange-word { font-size: 12.5px; font-weight: 520; color: var(--text); }
+    /* ---- 例句（考研词书，中英对照） ---- */
+    .d-examples { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--hairline); }
+    .examples-title { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; color: var(--text-2); margin-bottom: 6px; }
+    .example-item { margin-bottom: 7px; }
+    .example-item:last-child { margin-bottom: 0; }
+    .example-en { font-size: 12.5px; line-height: 1.5; color: var(--text); }
+    .example-cn { margin-top: 1px; font-size: 11.5px; line-height: 1.45; color: var(--text-2); }
+    .example-hl { color: #EF4444; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -568,17 +597,104 @@
     ttsStopAudio();
   }
 
+  /* ---- ECDICT 增强信息（考试标签 / 柯林斯星级 / 牛津3000 / 词频 + 词形变化） ---- */
+  const TAG_NAMES = { zk: "中考", gk: "高考", cet4: "四级", cet6: "六级", ky: "考研", toefl: "托福", ielts: "雅思", gre: "GRE" };
+  function tagNames(tagStr) {
+    if (!tagStr) return [];
+    return String(tagStr).trim().split(/\s+/).filter(Boolean).map((t) => TAG_NAMES[t] || t);
+  }
+  const EXCHANGE_LABELS = { p: "过去式", d: "过去分词", i: "现在分词", "3": "第三人称单数", r: "比较级", t: "最高级", s: "复数", "0": "原形", "1": "变换" };
+  const EXCHANGE_ORDER = ["p", "d", "i", "3", "r", "t", "s", "0", "1"];
+  function exchangeRows(ex) {
+    if (!ex) return [];
+    const groups = {};
+    String(ex).split("/").forEach((item) => {
+      const i = item.indexOf(":");
+      if (i <= 0) return;
+      const t = item.slice(0, i);
+      const w = item.slice(i + 1);
+      if (!w) return;
+      (groups[t] = groups[t] || []).push(w);
+    });
+    return EXCHANGE_ORDER.filter((t) => groups[t]).map((t) => ({ label: EXCHANGE_LABELS[t] || t, words: groups[t] }));
+  }
+  function extInfoHtml(ext) {
+    if (!ext) return "";
+    const chips = [];
+    (tagNames(ext.tag) || []).forEach((name) => chips.push(`<span class="tag-chip">${esc(name)}</span>`));
+    if (ext.col) chips.push(`<span class="stars" title="柯林斯星级 ${ext.col}">${"★".repeat(ext.col)}</span>`);
+    if (ext.ox) chips.push(`<span class="ox-chip">牛津3000</span>`);
+    const freq = [];
+    if (ext.bnc) freq.push(`<span>BNC #${ext.bnc}</span>`);
+    if (ext.frq) freq.push(`<span>当代 #${ext.frq}</span>`);
+    const parts = [];
+    if (chips.length) parts.push(`<span class="ext-chips">${chips.join("")}</span>`);
+    if (freq.length) parts.push(`<span class="ext-freq">${freq.join("")}</span>`);
+    if (!parts.length) return "";
+    return `<div class="d-ext-info">${parts.join("")}</div>`;
+  }
+  function extBlockHtml(ext) {
+    const rows = exchangeRows(ext && ext.ex);
+    if (!rows.length) return "";
+    return `<div class="d-exchange">
+      <div class="exchange-title">词形变化</div>
+      <div class="exchange-rows">${rows.map((r) =>
+        `<span class="exchange-item"><span class="exchange-label">${esc(r.label)}</span><span class="exchange-words">${r.words.map((w) => `<span class="exchange-word">${esc(w)}</span>`).join("")}</span></span>`
+      ).join("")}</div>
+    </div>`;
+  }
+  const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  function highlightExample(text, word, variants) {
+    const terms = [word].concat(variants || []).filter(Boolean).map(escRe);
+    if (!terms.length) return esc(text);
+    const re = new RegExp(`\\b(${terms.join("|")})\\b`, "gi");
+    return esc(text).replace(re, (m) => `<span class="example-hl">${m}</span>`);
+  }
+  function extExamplesHtml(w, ext) {
+    const eg = ext && ext.eg;
+    if (!eg || !eg.length) return "";
+    const variants = [];
+    exchangeRows(ext && ext.ex).forEach((r) => (r.words || []).forEach((x) => variants.push(x)));
+    return `<div class="d-examples">
+      <div class="examples-title">例句</div>
+      ${eg.map((e) => `<div class="example-item">
+        <p class="example-en">${highlightExample(e.en, w, variants)}</p>${e.cn ? `<p class="example-cn">${esc(e.cn)}</p>` : ""}
+      </div>`).join("")}
+    </div>`;
+  }
+  /** 异步填充当前详情面板的增强区块（输入已变则作废） */
+  function renderExt(w) {
+    if (!window.ECDICT_EXT) return;
+    const apply = (ext) => {
+      if (q.value.trim().toLowerCase() !== w) return;
+      const info = result.querySelector(".d-ext-info");
+      const block = result.querySelector(".d-exchange");
+      const examples = result.querySelector(".d-examples");
+      if (info) info.innerHTML = extInfoHtml(ext);
+      if (block) block.innerHTML = extBlockHtml(ext);
+      if (examples) examples.innerHTML = extExamplesHtml(w, ext);
+      requestAnimationFrame(reportSize);
+    };
+    const synced = window.ECDICT_EXT ? window.ECDICT_EXT.get(w) : null;
+    if (synced) { apply(synced); return; }
+    window.ECDICT_EXT.getAsync(w).then(apply);
+  }
+
   function renderDetail(w) {
     const m = meta(w);
     result.innerHTML = `<div class="detail">
       <p class="d-word"><span>${esc(w)}<sup>${m.today}</sup></span><span class="d-actions"><span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span><button class="add-one-btn" data-addone="${esc(w)}" type="button">+1</button></span></p>
       <p class="d-ph">${esc(ph(w))}</p>
+      <div class="d-ext-info"></div>
       ${lines(w).map((l) => `<p class="d-line">${esc(l)}</p>`).join("")}
+      <div class="d-exchange"></div>
+      <div class="d-examples"></div>
       <p class="d-meta">今日查询 ${m.today} 次 · 累计查询 ${m.total} 次</p>
       <p class="note-label">笔记</p>
       <textarea class="note-input" rows="1" placeholder="记点笔记…">${esc(getWordNote(w))}</textarea>
     </div>`;
     bindOverlayNote(result.querySelector(".note-input"), w);
+    renderExt(w);
     requestAnimationFrame(reportSize); // 等下一帧 layout 稳定后再测尺寸，避免 IME 抖动/刚 innerHTML 后的中间值被上报 → params.height 偏小 → 内容被截切
   }
 

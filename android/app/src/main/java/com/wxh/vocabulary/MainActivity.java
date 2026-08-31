@@ -572,8 +572,18 @@ public class MainActivity extends Activity {
         /** 读取 ECDICT 分片数据（assets/www/data/ecdict-<letter>.js），返回整段 JS 文本；失败返回 null */
         @JavascriptInterface
         public String readDictionary(final String letter) {
+            return readDictFile("ecdict", letter);
+        }
+
+        /** 读取 ECDICT 增强数据分片（assets/www/data/ecdict-ext-<letter>.js），返回整段 JS 文本；失败返回 null */
+        @JavascriptInterface
+        public String readDictionaryExt(final String letter) {
+            return readDictFile("ecdict-ext", letter);
+        }
+
+        private String readDictFile(final String prefix, final String letter) {
             if (letter == null || !letter.matches("[a-z#]")) return null;
-            try (InputStream is = getAssets().open("www/data/ecdict-" + letter + ".js")) {
+            try (InputStream is = getAssets().open("www/data/" + prefix + "-" + letter + ".js")) {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream();
                 byte[] buf = new byte[16384];
                 int n;
