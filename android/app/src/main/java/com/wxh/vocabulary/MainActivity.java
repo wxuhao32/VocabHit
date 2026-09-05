@@ -767,6 +767,67 @@ public class MainActivity extends Activity {
             ReminderPrefs.saveSnapshot(MainActivity.this, json);
         }
 
+        /* ---------- 数据安全加固：持久「用过」心跳（SharedPreferences，不受 WebView 故障影响） ---------- */
+
+        /** 前端核心数据（生词/复习）确认装载或落盘成功后上报的心跳：在原生侧记录
+            「本机确曾有过用户数据」及其规模。此后任何一次启动若 WebView localStorage
+            偶发读取为空（冷启动存储层竞态/假就绪），前端即可凭此区分「老用户读取丢失」
+            与「真新用户」，绝不以默认空数据初始化/覆盖。规模如实上报（可增可减）：
+            上报时机均为「数据确认读取/写入成功」的会话，规模可信；
+            用户删光数据后规模归零，此时读空按真·无数据处理，不会造成死锁。 */
+        @JavascriptInterface
+        public void markDataUsed(final String hintJson) {
+            try {
+                android.content.SharedPreferences sp =
+                        getSharedPreferences("vh_data_guard", Context.MODE_PRIVATE);
+                long size = 0;
+                if (hintJson != null && !hintJson.isEmpty()) {
+                    org.json.JSONObject o = new org.json.JSONObject(hintJson);
+                    size = o.optLong("w", 0) + o.optLong("r", 0);
+                }
+                sp.edit().putBoolean("used", true)
+                        .putLong("size", size)
+                        .putLong("at", System.currentTimeMillis())
+                        .apply();
+            } catch (Throwable ignored) { }
+        }
+
+        /** 数据安全加固：WebView localStorage 偶发读取失败（读作空）时，前端据此区分
+            「新用户首次启动」与「老用户数据读取丢失」。凭据来自两处持久化（均为原生
+            SharedPreferences，不受 WebView 存储层故障影响）：
+            ① markDataUsed 心跳：核心数据确认装载/落盘后的规模上报（主要凭据）；
+            ② 通知快照：任务/复习状态变化推送（历史机制，补充 review/tasks 计数）。
+            返回 {"used":..,"size":..,"review":..,"tasks":..}；两处均无凭据时返回 null（真新用户）。 */
+        @JavascriptInterface
+        public String nativeDataHint() {
+            try {
+                android.content.SharedPreferences g =
+                        getSharedPreferences("vh_data_guard", Context.MODE_PRIVATE);
+                boolean guardUsed = g.getBoolean("used", false);
+                long size = g.getLong("size", 0);
+                int review = 0, tasks = 0;
+                boolean snapUsed = false;
+                String snap = ReminderPrefs.getSnapshot(MainActivity.this);
+                if (snap != null && !snap.isEmpty()) {
+                    org.json.JSONObject o = new org.json.JSONObject(snap);
+                    org.json.JSONArray rev = o.optJSONArray("review");
+                    org.json.JSONArray tks = o.optJSONArray("tasks");
+                    review = rev == null ? 0 : rev.length();
+                    tasks = tks == null ? 0 : tks.length();
+                    snapUsed = true;
+                }
+                if (!guardUsed && !snapUsed) return null;
+                return new org.json.JSONObject()
+                        .put("used", guardUsed || snapUsed)
+                        .put("size", size)
+                        .put("review", review)
+                        .put("tasks", tasks)
+                        .toString();
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+
         /** 启动时前端把本地设置静默下发：落盘 + 排程/取消，不申请任何权限。
             目的：强制原生 SharedPreferences 与前端 localStorage 对齐 ——
             升级安装、清除应用数据、历史桥调用失败等都会造成失配，
@@ -964,7 +1025,105 @@ public class MainActivity extends Activity {
                 if (f.exists()) f.delete();
             } catch (Exception ignored) { }
         }
-    }
+
+        /** JSON 备份导出：把备份中引用的设备图片文件（file:// 路径）压缩为 dataURL
+            内嵌进备份 JSON（保持单文件，迁移不丢图）。压缩失败时回退导出原始 content
+            （图片引用失效但文字数据不丢）。 */
+        @JavascriptInterface
+        public void exportJsonWithImages(final String name, final String mime, final String content, final String pathsJson) {
+            runOnUiThread(() -> new Thread(() -> {
+                try {
+                    String out = content;
+                    org.json.JSONArray arr = new org.json.JSONArray(pathsJson);
+                    for (int i = 0; i < arr.length(); i++) {
+                        String p = arr.optString(i, "");
+                        String dataUrl = fileToDataUrl(p);
+                        if (dataUrl != null) out = out.replace(p, dataUrl);
+                    }
+                    final String finalOut = out;
+                    runOnUiThread(() -> startTextExport(name, mime, finalOut));
+                } catch (Exception e) {
+                    android.util.Log.e("VocabBackup", "embed images failed", e);
+                    final String raw = content;
+                    runOnUiThread(() -> startTextExport(name, mime, raw));
+                }
+            }, "vh-bak-embed").start());
+        }
+
+        /** JSON 备份导入：把备份中嵌入的 dataURL 图片（错题 / 自定义背景）落地为私有目录
+            文件，返回 { dataUrl: newFileUrl } 映射；失败项不包含在映射中。 */
+        @JavascriptInterface
+        public String importImageDataUrls(final String entriesJson) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(entriesJson);
+                org.json.JSONObject map = new org.json.JSONObject();
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject e = arr.optJSONObject(i);
+                    if (e == null) continue;
+                    String dataUrl = e.optString("dataUrl", "");
+                    String kind = e.optString("kind", "mis");
+                    String path = saveDataUrlToFile(dataUrl, kind);
+                    if (path != null) map.put(dataUrl, path);
+                }
+                return map.toString();
+            } catch (Throwable t) {
+                return "{}";
+            }
+        }
+
+        /** 读取设备图片文件 → 降采样压缩（最长边 ≤1280, JPEG 0.82）→ base64 dataURL；失败返回 null */
+        private String fileToDataUrl(final String path) {
+            try {
+                String p = path.startsWith("file://") ? path.substring(7) : path;
+                java.io.File f = new java.io.File(p);
+                if (!f.exists() || !f.isFile()) return null;
+                android.graphics.BitmapFactory.Options bounds = new android.graphics.BitmapFactory.Options();
+                bounds.inJustDecodeBounds = true;
+                android.graphics.BitmapFactory.decodeFile(p, bounds);
+                int sample = 1;
+                int longest = Math.max(bounds.outWidth, bounds.outHeight);
+                while (longest / (sample * 2) >= 1280) sample *= 2;
+                android.graphics.BitmapFactory.Options opts = new android.graphics.BitmapFactory.Options();
+                opts.inSampleSize = sample;
+                android.graphics.Bitmap bmp = android.graphics.BitmapFactory.decodeFile(p, opts);
+                if (bmp == null) return null;
+                java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+                bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, bos);
+                bmp.recycle();
+                byte[] bytes = bos.toByteArray();
+                return "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+
+        /** 把 dataURL 图片落地为私有目录文件：mis → mistakes/mis_<ts>.jpg（删除错题时随记录清理），
+            bg → background/bg.jpg（单文件覆盖式，与应用背景保存口径一致）；失败返回 null */
+        private String saveDataUrlToFile(final String dataUrl, final String kind) {
+            try {
+                int idx = dataUrl.indexOf("base64,");
+                if (idx < 0) return null;
+                byte[] bytes = android.util.Base64.decode(dataUrl.substring(idx + 7), android.util.Base64.DEFAULT);
+                java.io.File dir;
+                String fname;
+                if ("bg".equals(kind)) {
+                    dir = new java.io.File(getFilesDir(), "background");
+                    fname = "bg.jpg";
+                } else {
+                    dir = new java.io.File(getFilesDir(), "mistakes");
+                    fname = "mis_" + System.currentTimeMillis() + ".jpg";
+                }
+                if (!dir.exists()) dir.mkdirs();
+                java.io.File dst = new java.io.File(dir, fname);
+                java.io.OutputStream out = new java.io.FileOutputStream(dst);
+                out.write(bytes);
+                out.close();
+                return "file://" + dst.getAbsolutePath();
+                } catch (Throwable t) {
+                return null;
+                }
+                }
+                }
 
     /* ---------- 通知提醒：权限结果回调 ---------- */
 

@@ -87,3 +87,6 @@ REVIEW_ANALYSIS.md
 # ===== 系统 =====
 .DS_Store
 Thumbs.db
+# ===== 回归测试工作目录 / 本地备份脚本（不进入版本库） =====
+_regtest/
+*.ps1

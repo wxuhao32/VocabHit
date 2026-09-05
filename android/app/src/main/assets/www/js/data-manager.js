@@ -65,6 +65,10 @@
       ok: (v) => v && typeof v === "object" && Array.isArray(v.items) },
     { key: "mathLab.recentExperiments", name: "Math Lab 最近实验",
       ok: (v) => v && typeof v === "object" && Array.isArray(v.items) },
+    { key: "vc-appbg", name: "应用背景模式", plain: true, // 裸字符串："default1"|"default2"|"custom"
+      ok: (v) => typeof v === "string" },
+    { key: "vc-appbg-custom", name: "自定义背景", plain: true, // APK 为 file:// 路径（原生嵌入图片），Web 为 dataURL
+      ok: (v) => typeof v === "string" },
   ];
 
   function hasBridge() { return !!(window.AndroidBridge && window.AndroidBridge.exportTextFile); }
@@ -122,11 +126,35 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
 
-  /** 导出 JSON：成功返回文件名，失败返回 null */
+  /** 收集备份数据中引用的设备图片文件（file:// 路径）：错题图片 + 自定义背景图。
+      仅收集 file://（APK 私有目录文件，JS 无法读取，需原生嵌入备份）；
+      Web 端图片本就是 dataURL，已包含在 JSON 中，无需处理。 */
+  function collectImagePaths(data) {
+    const paths = [];
+    const push = (p) => {
+      if (p && typeof p === "string" && p.indexOf("file://") === 0 && paths.indexOf(p) < 0) paths.push(p);
+    };
+    const mis = data["vc-mistakes"];
+    if (mis && Array.isArray(mis.items)) mis.items.forEach((it) => push(it && it.image));
+    push(data["vc-appbg-custom"]);
+    return paths;
+  }
+
+  /** 导出 JSON：成功返回文件名，失败返回 null
+      APK 端若有设备图片文件 → 原生压缩为 dataURL 嵌入备份（保持单文件，迁移不丢图）；
+      无图片或 Web 端 → 走既有纯 JSON 导出，行为不变。 */
   function exportJson() {
     try {
       const name = `VocabHit-备份-${stamp()}.json`;
-      const json = JSON.stringify(buildBackup(), null, 1);
+      const backup = buildBackup();
+      const json = JSON.stringify(backup, null, 1);
+      if (window.AndroidBridge && typeof window.AndroidBridge.exportJsonWithImages === "function") {
+        const paths = collectImagePaths(backup.data);
+        if (paths.length) {
+          window.AndroidBridge.exportJsonWithImages(name, "application/json", json, JSON.stringify(paths));
+          return name;
+        }
+      }
       saveText(name, "application/json", json);
       return name;
     } catch (e) {
@@ -208,6 +236,38 @@
       return { ok: false, error: "写入失败，已恢复导入前数据：" + (e && e.message ? e.message : "存储异常") };
     }
     return { ok: true, count: written.length };
+  }
+
+  /** 导入前处理：把备份中嵌入的 dataURL 图片（错题 / 自定义背景）交给原生落地为
+      私有目录文件（APK 端），并将 plan 中的 dataURL 引用替换为新的 file:// 路径。
+      Web 端图片本就是 dataURL，无需处理（无桥接时静默跳过）。 */
+  function resolveImportedAssets(plan) {
+    if (!(window.AndroidBridge && typeof window.AndroidBridge.importImageDataUrls === "function")) return;
+    const entries = [];
+    plan.forEach(({ key, value }) => {
+      if (key === "vc-mistakes" && value && Array.isArray(value.items)) {
+        value.items.forEach((it) => {
+          if (it && typeof it.image === "string" && it.image.indexOf("data:image") === 0) {
+            entries.push({ dataUrl: it.image, kind: "mis" });
+          }
+        });
+      }
+      if (key === "vc-appbg-custom" && typeof value === "string" && value.indexOf("data:image") === 0) {
+        entries.push({ dataUrl: value, kind: "bg" });
+      }
+    });
+    if (!entries.length) return;
+    let map = {};
+    try { map = JSON.parse(window.AndroidBridge.importImageDataUrls(JSON.stringify(entries))) || {}; }
+    catch (e) { return; }
+    plan.forEach((p) => {
+      if (p.key === "vc-mistakes" && p.value && Array.isArray(p.value.items)) {
+        p.value.items.forEach((it) => {
+          if (it && typeof it.image === "string" && map[it.image]) it.image = map[it.image];
+        });
+      }
+      if (p.key === "vc-appbg-custom" && map[p.value]) p.value = map[p.value];
+    });
   }
 
   /* ---------- 确认弹窗（与应用视觉一致的轻量层） ---------- */
@@ -300,6 +360,9 @@
       danger: true,
     });
     if (!okd) return;
+
+    // 0. 备份中嵌入的 dataURL 图片 → 原生落地为私有目录文件（APK 端），并回写新路径
+    resolveImportedAssets(r.plan);
 
     // 1. 导入前备份（当前数据 → 文件，用户可见可恢复）
     const backupName = exportJson();

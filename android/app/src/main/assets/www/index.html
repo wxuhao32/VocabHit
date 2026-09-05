@@ -17,17 +17,162 @@
       document.documentElement.style.background = dark ? "#0B0E14" : "#F7F8FA";
     } catch (e) { document.documentElement.dataset.theme = "light"; }
   </script>
+  <script>
+    /* ============ 数据安全加固：localStorage 读取保护层（VH_STG） ============
+       背景：Android WebView 冷启动偶现「localStorage 读取为空 / 抛异常」的竞态，
+       而各模块的初始化链会在读取失败时用默认空数据落盘，造成「老用户启动成刚安装」。
+       本层职责（零业务侵入，仅提供判定与写保护）：
+         ① safeRead(key, hint)：严格区分「真正没有数据(absent)」与「暂时没读到(unverified)」；
+            判定依据：读取/解析异常 → unverified；「整库读空」且原生凭据表明本机曾有过数据
+            （SharedPreferences 心跳/通知快照，不受 WebView 存储层故障影响）→ 读取丢失 unverified；
+            其余（存储中仍有其它真实数据 / 真·新用户无凭据）→ absent，正常走首次初始化。
+         ② 写保护：读取未确认的键，其 save 一律拒绝落盘；整库读空期间，
+            其他核心数据的写入同样拦截（防止半空状态互相覆盖）。
+         ③ 损坏（可读但 JSON 解析失败）的键单独标记，不做全局连坐。
+       【重要修正】判定必须基于「整库是否读空」而非「本键是否为空」：
+       —— 各功能键（如 vc-review-today / vc-review-days / vc-pomo-records / vc-fsrs-adaptive 等）
+          只在用户真正使用过对应功能后才创建。若仅因「本键为空 + 原生心跳存在」就判读取丢失，
+          会把大量合法缺失键标成 failed，触发全局写保护，导致后续 Review / 每日任务 / 坚持看板 /
+          统计的一切保存被静默拦截 —— 表现为「完成即丢失、重启即回滚」。 */
+    window.VH_STG = (function () {
+      var failed = {};   // key -> "error"|"corrupt"|"lost"|"notready"（corrupt=永久，其余视为暂时）
+      var hintCache = null;
+      var storeSeen = false; // 本会话是否已确认 localStorage 上有真实数据（命中后免全键扫描）
+
+      /* 存储可用性探针：写入 → 读回 → 清理 全链路验证 */
+      function probe() {
+        try {
+          var k = "__vh_stg_probe__";
+          localStorage.setItem(k, "1");
+          var v = localStorage.getItem(k);
+          localStorage.removeItem(k);
+          return v === "1";
+        } catch (e) { return false; }
+      }
+
+      /* 原生数据凭据：通知快照（SharedPreferences 持久，不受 WebView 故障影响）。
+         {used:是否曾推送过, review:快照内复习词数, tasks:快照内任务数} 或 null */
+      function nativeHint() {
+        if (hintCache) return hintCache;
+        try {
+          var s = window.AndroidBridge && window.AndroidBridge.nativeDataHint
+            ? window.AndroidBridge.nativeDataHint() : null;
+          if (s) hintCache = JSON.parse(s);
+        } catch (e) { hintCache = null; }
+        return hintCache;
+      }
+
+      /* 核心用户数据键清单：老设备上曾存在过；读取为空时优先信「暂时没读到」而非「新用户」 */
+      var CORE_KEYS = { "vc-records": 1, "vc-review": 1, "vc-review-revlogs": 1, "vc-review-days": 1, "vc-review-today": 1, "vc-review-session-v2": 1, "vc-fsrs-adaptive": 1, "vc-stats": 1, "vc-tasks": 1, "vc-spaced-repetition": 1, "vc-pomo-records": 1, "vc-word-notes": 1, "vc-mistakes": 1, "vc-repo": 1, "vc-materials": 1, "vc-highlights": 1, "vc-notify": 1 };
+      /* 原生持久凭据（markDataUsed 心跳 + 通知快照，均存 SharedPreferences，不受 WebView 故障影响）
+         是否表明本机曾有过用户数据（仅用于「整库读空」时的读取丢失判定）。 */
+      function usedByNative() {
+        var h = nativeHint();
+        return !!(h && h.used && ((h.size || 0) > 0 || (h.review || 0) > 0 || (h.tasks || 0) > 0));
+      }
+
+      /** localStorage 上是否仍有任何真实数据。
+          冷启动「假就绪」/存储层故障 = 读写落在临时空存储，所有键读空 → 返回 false；
+          任一键读得到内容 → 存储真就绪（其余键读空 = 真没有，非丢失）。
+          命中后置 storeSeen 缓存，避免每次 safeRead 全键扫描的开销。 */
+      function anyStorageValue() {
+        if (storeSeen) return true;
+        try {
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && localStorage.getItem(k)) { storeSeen = true; return true; }
+          }
+        } catch (e) { /* 存储不可读 → 保持 false，走未就绪判定 */ }
+        return false;
+      }
+
+      function markFailed(k, reason) { if (!failed[k]) failed[k] = reason; }
+      function isFailed(k) { return !!failed[k]; }
+      function anyFailed() { for (var k in failed) return true; return false; }
+      /* 暂时性异常（非损坏）：读取丢失/未就绪/读取抛错 —— 期间全局禁止核心数据写入 */
+      function anyTransientFailed() {
+        for (var k in failed) if (failed[k] !== "corrupt") return true;
+        return false;
+      }
+      /* 写保护：本键未确认，或存在暂时性异常 → 拒绝写入（宁可不写，不可错写） */
+      function writeBlocked(k) { return isFailed(k) || anyTransientFailed(); }
+
+      function safeRead(key, hint) {
+        var raw;
+        try { raw = localStorage.getItem(key); }
+        catch (e) { markFailed(key, "error"); return { status: "unverified", reason: "error" }; }
+        if (raw === null) {
+          // 整库是否读空：冷启动假就绪/存储故障时全部键为空；健康存储下必然有至少一个真实键
+          var wholeEmpty = !anyStorageValue();
+          // 证据只认 usedByNative（聚合了心跳规模 + 快照 review/tasks 计数，均 >0 才算数）。
+          // 不再叠加 hint：HINT.USED 只是「曾用过」，用户删光数据（size=0/review=0/tasks=0）
+          // 后键读空是正常状态，若被当作证据会把用户永久锁死在写保护态。
+          if (wholeEmpty && usedByNative()) {
+            // 整库读空 + 原生凭据表明本机确曾有过数据 → 存储层故障 / 假就绪 → 读取丢失（写保护 + 后台恢复）
+            markFailed(key, "lost");
+            return { status: "unverified", reason: "lost" };
+          }
+          if (!probe()) {                          // 存储未就绪
+            markFailed(key, "notready");
+            return { status: "unverified", reason: "notready" };
+          }
+          delete failed[key];                      // 存储健康：本键确不存在 → 清除历史标记，按首次处理
+          return { status: "absent" };
+        }
+        storeSeen = true;                          // 读得到内容 = 存储已就绪（后续空键即为真缺失）
+        try {
+          var v = JSON.parse(raw);
+          delete failed[key];
+          return { status: "ok", value: v };
+        } catch (e) {
+          markFailed(key, "corrupt");              // 数据串损坏：存在但读不出 → 绝不覆盖
+          return { status: "unverified", reason: "corrupt" };
+        }
+      }
+
+      /** 重检全部暂时性失败键（存储故障恢复 / 后台恢复重试时调用）：
+          真实数据恢复 → ok / 确认真没有 → absent，均会清除对应标记；
+          损坏(corrupt)键永久保留，不在此重试。 */
+      function recheckFailed() {
+        for (var k in failed) {
+          if (failed[k] === "corrupt") continue;
+          safeRead(k, null);
+        }
+      }
+
+      return {
+        safeRead: safeRead,
+        probe: probe,
+        markFailed: markFailed,
+        recheckFailed: recheckFailed,
+        clearFailed: function (k) { delete failed[k]; },
+        isFailed: isFailed,
+        anyFailed: anyFailed,
+        writeBlocked: writeBlocked,
+        HINT: {
+          /* 快照存在 ⇒ 应用曾写入过用户数据（生词/查询记录必然随之存在过） */
+          USED: function (h) { return !!(h && h.used); },
+          /* 快照含复习词 ⇒ vc-review 曾存在 */
+          REVIEW: function (h) { return !!(h && h.review > 0); },
+          /* 快照含任务 ⇒ vc-tasks 曾存在 */
+          TASKS: function (h) { return !!(h && h.tasks > 0); }
+        }
+      };
+    })();
+  </script>
   <style>
     /* 首帧底色兜底（与启动窗口/闪屏同色）；外部样式表加载后由各自规则接管 */
     html, body, #splash { background: #F7F8FA; }
   </style>
-  <link rel="stylesheet" href="css/style.css?v=37" />
+  <link rel="stylesheet" href="css/style.css?v=40" />
   <link rel="stylesheet" href="css/knowledge.css?v=12" />
   <link rel="stylesheet" href="css/math-lab.css?v=5" />
-  <link rel="stylesheet" href="css/spaced-repetition.css?v=9" />
+  <link rel="stylesheet" href="css/spaced-repetition.css?v=10" />
   <link rel="stylesheet" href="css/ky-level.css?v=2" />
   <link rel="stylesheet" href="css/splash.css?v=2" />
   <link rel="stylesheet" href="css/app-bg.css?v=1" />
+  <!-- 开发/测试数据注入：?seed=repo 时注入 3 生词 + 测试库(1 挖空 / 2 提问) -->
+  <script src="js/seed-dev.js"></script>
 </head>
 <body>
 
@@ -361,7 +506,7 @@
             <div class="settings-item">
               <div class="settings-item-label">
                 <span>版本</span>
-                <span class="settings-item-value">1.3.0</span>
+                <span class="settings-item-value">1.3.3</span>
               </div>
             </div>
         </div>
@@ -492,6 +637,12 @@
             <path d="M10 3L5 8l5 5"/>
           </svg>
         </button>
+        <!-- 「回退」：撤销上一步操作，回到上一张卡片（仅沉浸复习时显示；无可回退历史时置灰） -->
+        <button id="review-undo" type="button" aria-label="回退上一张" disabled>
+          <svg class="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 3.5 2.5 7 6 10.5"/><path d="M2.5 7h6.6a3.7 3.7 0 0 1 0 7.4H7.5"/>
+          </svg>
+        </button>
         <button class="page-header-action" id="review-clear" type="button" aria-label="清空复习队列">清空</button>
       </header>
       <!-- 沉浸式顶部进度区：极细进度条 + 轻量计数（JS 控制显隐与宽度） -->
@@ -557,7 +708,7 @@
         <svg class="icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
           <circle cx="9" cy="9" r="6"/><path d="M14 14l4 4"/>
         </svg>
-        <input id="sheet-input" type="text" placeholder="输入单词查释义 · 输入中文找单词" autocomplete="off" />
+        <input id="sheet-input" type="text" placeholder="输入单词查释义 · 输入中文找单词" autocomplete="off" enterkeyhint="search" />
         <button class="sheet-close" id="sheet-close" type="button" aria-label="关闭">取消</button>
       </div>
       <div class="sheet-body" id="sheet-body"></div>
@@ -611,16 +762,16 @@
 
   <script defer src="js/dict.js"></script>
   <script defer src="js/ky-manual.js"></script>
-  <script defer src="js/ky-level.js?v=2"></script>
-  <script defer src="js/ecdict.js"></script>
-  <script defer src="js/stats.js?v=1"></script>
+  <script defer src="js/ky-level.js?v=4"></script>
+  <script defer src="js/ecdict.js?v=2"></script>
+  <script defer src="js/stats.js?v=2"></script>
   <script defer src="js/export-template.js?v=2"></script>
   <script defer src="js/fsrs.js?v=2"></script>
-  <script defer src="js/app.js?v=45"></script>
+  <script defer src="js/app.js?v=55"></script>
   <script defer src="js/app-bg.js?v=2"></script>
   <script defer src="js/stats-export.js?v=1"></script>
-  <script defer src="js/data-manager.js?v=5"></script>
-  <script defer src="js/knowledge.js?v=18"></script>
+  <script defer src="js/data-manager.js?v=7"></script>
+  <script defer src="js/knowledge.js?v=19"></script>
   <script defer src="js/math-lab/mathEngine.js?v=2"></script>
   <script defer src="js/math-lab/mathLabData.js?v=3"></script>
   <script defer src="js/math-lab/mathLabConfig.js?v=2"></script>
@@ -628,7 +779,7 @@
   <script defer src="js/math-lab/mathCanvas.js?v=4"></script>
   <script defer src="js/math-lab/mathPresets.js?v=4"></script>
   <script defer src="js/math-lab/mathLab.js?v=7"></script>
-  <script defer src="js/spaced-repetition/srData.js?v=6"></script>
-  <script defer src="js/spaced-repetition/srUI.js?v=11"></script>
+  <script defer src="js/spaced-repetition/srData.js?v=7"></script>
+  <script defer src="js/spaced-repetition/srUI.js?v=12"></script>
 </body>
 </html>

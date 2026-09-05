@@ -6,9 +6,9 @@
      - snapshot()：今日/累计 词汇·知识点·时长 卡片数字
      - last7()  ：近 7 天逐日 词汇复习 / 知识点复习 / 学习时长
    输出：
-     - renderReport() → { page, bar, line, days, snap }
-       page=完整报告画布（PNG 长图 / PDF 页面），bar/line=单图裁切
-       （Word 内嵌高质量图表图片用）
+     - renderReport() → { page, bar, lineCum, lineDaily, days, snap }
+       page=完整报告画布（PNG 长图 / PDF 页面），bar/lineCum/lineDaily=单图裁切
+       （Word 内嵌高质量图表图片用；折线图拆分为累计+每日两张）
      - buildWordMhtml(report) → Word 可直接打开的 MHTML 文本
        （图表以 base64 图片嵌入 + 统计数字表格 + 说明文字）
    导出链路复用既有能力：PDF 走 VH_ExportTemplate 的 JPEG→PDF /
@@ -22,7 +22,7 @@
 (function () {
   /* ---------- 页面与样式常量 ---------- */
 
-  const PW = 840, PH = 1188;   // 报告画布 CSS 尺寸（A4 比例 96dpi）
+  const PW = 840, PH = 1510;   // 报告画布 CSS 尺寸（折线图拆分为累计/每日两张后页面加高）
   const SCALE = 2;             // 超采样：文字与线条锐利
   const MARGIN = 44;
 
@@ -36,9 +36,11 @@
   const TEAL = "#3EBD93";      // 柔和青绿（知识点复习）
   const HIGHLIGHT_BG = "#F1F1F8"; // 今日列底
 
-  /* 图表区域（css 坐标，供 Word 单图裁切） */
+  /* 图表区域（css 坐标，供 Word 单图裁切）；
+     折线图拆分为两张：累计在上（LINE_RECT）、每日在下（LINE_RECT2），尺寸样式一致 */
   const BAR_RECT = { x: MARGIN, y: 424, w: PW - MARGIN * 2, h: 282 };
   const LINE_RECT = { x: MARGIN, y: 742, w: PW - MARGIN * 2, h: 306 };
+  const LINE_RECT2 = { x: MARGIN, y: 1064, w: PW - MARGIN * 2, h: 306 };
 
   /* ---------- 小工具 ---------- */
 
@@ -100,7 +102,8 @@
     drawHeader(ctx, days);
     drawStatCards(ctx, snap);
     drawBarChart(ctx, days);
-    drawLineChart(ctx, days);
+    drawLineChart(ctx, days, "cum", LINE_RECT);   // 累计折线图（上）
+    drawLineChart(ctx, days, "daily", LINE_RECT2); // 每日折线图（下）
     drawFooter(ctx);
 
     return canvas;
@@ -300,23 +303,27 @@
     ctx.fillText("词汇复习 = 生词 Review · 知识点复习 = 知识条目间隔重复", BAR_RECT.x + 2, BAR_RECT.y + BAR_RECT.h - 4);
   }
 
-  function drawLineChart(ctx, days) {
-    sectionTitle(ctx, LINE_RECT.y + 20, "学习时长趋势 · 近 7 天", [
-      { name: "每日时长（分钟）", color: VIOLET },
+  /* 折线图（学习时长，单系列）：series="cum" 累计 / "daily" 每日。
+     原双线同图拆分为两张独立折线图（累计在上、每日在下），
+     绘制/字体/样式逻辑不变，仅按系列分别取值（cum=cumMin / daily=dailyMin）。 */
+  function drawLineChart(ctx, days, series, rect) {
+    const isCum = series === "cum";
+    sectionTitle(ctx, rect.y + 20, isCum ? "累计学习时长 · 近 7 天" : "每日学习时长 · 近 7 天", [
+      { name: isCum ? "累计时长（分钟）" : "每日时长（分钟）", color: VIOLET },
     ]);
 
     const plot = {
-      x0: LINE_RECT.x + 46, x1: LINE_RECT.x + LINE_RECT.w - 10,
-      y0: LINE_RECT.y + 66, y1: LINE_RECT.y + 258,
+      x0: rect.x + 46, x1: rect.x + rect.w - 10,
+      y0: rect.y + 66, y1: rect.y + 258,
     };
     const n = days.length;
-    const maxV = niceMax(Math.max(1, ...days.map((d) => d.dailyMin)));
+    const maxV = niceMax(Math.max(1, ...days.map((d) => (isCum ? d.cumMin : d.dailyMin))));
 
     const todayIdx = days.findIndex((d) => d.isToday);
     if (todayIdx >= 0) todayBand(ctx, plot, todayIdx, n);
     drawPlotFrame(ctx, plot, maxV, 4, "分钟");
 
-    const vals = days.map((d) => d.dailyMin);
+    const vals = days.map((d) => (isCum ? d.cumMin : d.dailyMin));
     const px = (i) => plot.x0 + ((plot.x1 - plot.x0) / (n - 1)) * i;
     const py = (v) => plot.y1 - (plot.y1 - plot.y0) * (Math.min(v, maxV) / maxV);
 
@@ -376,7 +383,7 @@
     ctx.textAlign = "left";
     ctx.fillStyle = FAINT;
     ctx.font = `400 11px ${FONT}`;
-    ctx.fillText("学习时长 = 复习有效时长 + 专注番茄时长 · 每日按 04:00 业务日划分", LINE_RECT.x + 2, LINE_RECT.y + LINE_RECT.h - 4);
+    ctx.fillText("学习时长 = 复习有效时长 + 专注番茄时长 · 每日按 04:00 业务日划分", rect.x + 2, rect.y + rect.h - 4);
   }
 
   function drawFooter(ctx) {
@@ -421,8 +428,9 @@
     return canvas.toDataURL("image/png").split(",")[1];
   }
 
-  /** Word 文档 HTML（图表图片 + 统计数字表格 + 说明文字） */
-  function buildWordHtml(days, snap, barB64, lineB64) {
+  /** Word 文档 HTML（图表图片 + 统计数字表格 + 说明文字）
+      折线图拆分为两张：累计（上）/ 每日（下），排版与样式沿用原有结构 */
+  function buildWordHtml(days, snap, barB64, lineCumB64, lineDailyB64) {
     const exported = new Date();
     const p = (n) => String(n).padStart(2, "0");
     const dateStr = `${exported.getFullYear()}年${exported.getMonth() + 1}月${exported.getDate()}日 ${p(exported.getHours())}:${p(exported.getMinutes())}`;
@@ -477,9 +485,12 @@ table.data th { background: #F6F6F9; font-weight: 600; }
 <p class="desc">词汇复习（生词 Review）与知识点复习（知识条目间隔重复）的每日数量对比，两色柱形分别呈现。</p>
 <p><img class="chart" src="vh-chart-bar.png" alt="复习数量柱状图"></p>
 <table class="data"><tr><th>日期</th><th>词汇复习（个）</th><th>知识点复习（个）</th></tr>${barTable}</table>
-<h2>二、学习时长趋势（近 7 天）</h2>
+<h2>二、累计学习时长（近 7 天）</h2>
+<p class="desc">累计学习 / 复习时长（分钟）趋势，累计数据永久连续、不随窗口重置。</p>
+<p><img class="chart" src="vh-chart-line-cum.png" alt="累计学习时长折线图"></p>
+<h2>三、每日学习时长（近 7 天）</h2>
 <p class="desc">每日学习 / 复习时长（分钟）趋势，时长 = 复习有效时长 + 专注番茄时长，按 04:00 业务日划分。</p>
-<p><img class="chart" src="vh-chart-line.png" alt="学习时长折线图"></p>
+<p><img class="chart" src="vh-chart-line-daily.png" alt="每日学习时长折线图"></p>
 <table class="data"><tr><th>日期</th><th>学习时长（分钟）</th></tr>${lineTable}</table>
 <p class="footer">数据来自 VocabHit 本地真实学习记录 · 由 VocabHit 生成</p>
 </div></body></html>`;
@@ -507,10 +518,11 @@ table.data th { background: #F6F6F9; font-weight: 600; }
 
   function buildWordMhtml(report) {
     const html = buildWordHtml(report.days, report.snap,
-      canvasB64(report.bar), canvasB64(report.line));
+      canvasB64(report.bar), canvasB64(report.lineCum), canvasB64(report.lineDaily));
     return buildMhtml(html, [
       { name: "vh-chart-bar.png", type: "image/png", b64: canvasB64(report.bar) },
-      { name: "vh-chart-line.png", type: "image/png", b64: canvasB64(report.line) },
+      { name: "vh-chart-line-cum.png", type: "image/png", b64: canvasB64(report.lineCum) },
+      { name: "vh-chart-line-daily.png", type: "image/png", b64: canvasB64(report.lineDaily) },
     ]);
   }
 
@@ -526,7 +538,8 @@ table.data th { background: #F6F6F9; font-weight: 600; }
     return {
       page,
       bar: cropRegion(page, BAR_RECT),
-      line: cropRegion(page, LINE_RECT),
+      lineCum: cropRegion(page, LINE_RECT),    // 累计折线图（上）
+      lineDaily: cropRegion(page, LINE_RECT2), // 每日折线图（下）
       days,
       snap,
     };

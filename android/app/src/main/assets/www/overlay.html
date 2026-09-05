@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>VocabHit · 悬浮查词</title>
+  <!-- 考研词书释义分级样式：直接复用主应用同一份 css/ky-level.css（等级色 + 「僻」角标） -->
+  <link rel="stylesheet" href="css/ky-level.css?v=2" />
   <style>
     /* 与主应用一致的设计语言：Minimal · Calm · Clean · Premium */
     :root {
@@ -284,12 +286,38 @@
   </div>
 
   <script src="js/dict.js"></script>
+  <!-- 考研词书释义分级：与主应用同一份数据/逻辑（人工标注 + 算法兜底），悬浮条不另实现 -->
+  <script src="js/ky-manual.js"></script>
+  <script src="js/ky-level.js?v=4"></script>
   <script src="js/ecdict.js"></script>
   <script>
   "use strict";
   /* ---- 与主应用一致的记录逻辑（localStorage vc-records 同源共享） ---- */
   const KEY = "vc-records";
   let records = { day: "", history: [], words: {} };
+
+  /* ---- 存储守卫：区分「真没数据」与「暂时没读到」（数据安全加固） ----
+     悬浮窗能被拉起 ⇒ 主应用至少运行过一次并写入过 vc-overlay 等哨兵键（同源 localStorage）。
+     因此：若所有哨兵键都读不到（无论写入探针是否通过），都视为 WebView 存储层未就绪/故障
+     （偶发冷启动竞态，读写可能落在临时空存储上）——此时禁止一切写盘，防止 rollover/save
+     把空数据写进 vc-records 覆盖用户真实生词记录；定时重试装载，哨兵出现后自动解除。 */
+  const STG_SENTINELS = ["vc-overlay", "vc-theme", "vc-review", "vc-records", "vc-word-notes"];
+  let stgReady = false;   // 已确认读到主应用写入过的键 → 存储可信
+  let stgBlocked = false; // 未确认期间：禁止一切写盘（宁可不写，不可错写）
+  let stgRetryTimer = null;
+  function stgCheck() {
+    if (stgReady) return true;
+    let seen = false;
+    try { for (const k of STG_SENTINELS) { if (localStorage.getItem(k) !== null) { seen = true; break; } } }
+    catch (_) { }
+    if (seen) { stgReady = true; stgBlocked = false; return true; }
+    stgBlocked = true; // 哨兵全缺：主应用运行过却读不到任何键 → 存储未挂接/故障
+    return false;
+  }
+  function stgScheduleRetry() {
+    if (stgRetryTimer) return;
+    stgRetryTimer = setTimeout(() => { stgRetryTimer = null; load(); }, 1500);
+  }
 
   /** 词条有效性：考研词书或 ECDICT 已加载分片命中 */
   const known = (w) => !!DICT_DATA[w] || !!window.ECDICT.get(w);
@@ -300,6 +328,7 @@
     return `${s.getFullYear()}-${pad2(s.getMonth() + 1)}-${pad2(s.getDate())}`;
   }
   function load() {
+    if (!stgCheck()) { stgScheduleRetry(); return; } // 存储未确认：不读不写不迁移，等重试
     try {
       const saved = JSON.parse(localStorage.getItem(KEY) || "null");
       if (saved && saved.words) records = saved;
@@ -320,7 +349,7 @@
     }
     if (changed) save();
   }
-  function save() { localStorage.setItem(KEY, JSON.stringify(records)); }
+  function save() { if (stgBlocked) return; localStorage.setItem(KEY, JSON.stringify(records)); } // 存储未确认时拒绝写盘（防空数据覆盖真实生词记录）
   function rollover() {
     const day = vocabDay();
     if (records.day === day) return;
@@ -370,18 +399,21 @@
     const d = entry(w);
     return d && (d.ph || d.p) ? `/${(d.ph || d.p)}/` : "";
   };
-  /** ECDICT 词条（{p,s}）→ senses 结构 */
+  /** ECDICT 词条（{p,s}）→ senses 结构。
+      词性过 KY.normPos 标准化（与主应用同一规则源：a.→adj. / ad.→adv. / vbl.→v.
+      及复合词性脏数据清理；域标签与语义不唯一标记原样保留） */
   function ecdictSenses(d) {
     if (!d || !d.s) return [];
+    const norm = window.KY && KY.normPos ? KY.normPos : (p) => p;
     return d.s.split("\n").map((ln) => {
       ln = ln.trim();
       if (!ln) return ["", []];
       const m = ln.match(/^((?:\[[^\]\n]{1,20}\]|[a-z]{1,8}\.)\s*)(.*)$/i);
-      if (m) return [m[1].trim(), [m[2] || ln]];
+      if (m) return [norm(m[1].trim()), [m[2] || ln]];
       return ["", [ln]];
     }).filter(([, ss]) => ss.length);
   }
-  const sensesOf = (d) => (d && d.senses ? d.senses : ecdictSenses(d));
+  const sensesOf = (d) => (d && d.senses ? d.senses.map(([pos, ss]) => [(window.KY && KY.normPos ? KY.normPos(pos) : pos), ss]) : ecdictSenses(d));
   function brief(w) {
     const d = entry(w);
     if (!d) return "";
@@ -390,6 +422,16 @@
   }
   const lines = (w) => sensesOf(entry(w))
     .map(([pos, ss]) => `${pos ? pos + " " : ""}${ss.join("；")}`);
+  /** 详情释义行 HTML：与首页查词同一渲染入口（js/ky-level.js 的 KY.detailHtml）。
+      · 命中考研词书 → 高/中/低频等级色 + 考研熟词僻义「僻」角标，与首页完全一致；
+      · 未命中考研词书（ECDICT 兜底）→ 沿用原有纯文本释义行，不套用等级颜色。
+      查询优先级（考研优先、EC 兜底）与词条获取方式均不变。 */
+  const detailLinesHtml = (w) => {
+    const plain = lines(w);
+    return window.KY
+      ? KY.detailHtml(w, plain, "d-line")
+      : plain.map((l) => `<p class="d-line">${esc(l)}</p>`).join("");
+  };
   function search(q, limit = 5) {
     q = q.trim().toLowerCase();
     if (!q) return [];
@@ -686,7 +728,7 @@
       <p class="d-word"><span>${esc(w)}<sup>${m.today}</sup></span><span class="d-actions"><span class="speaker-btn" data-speak="${esc(w)}" role="button" aria-label="播放读音" type="button">${SPEAKER_SVG}</span><button class="add-one-btn" data-addone="${esc(w)}" type="button">+1</button></span></p>
       <p class="d-ph">${esc(ph(w))}</p>
       <div class="d-ext-info"></div>
-      ${lines(w).map((l) => `<p class="d-line">${esc(l)}</p>`).join("")}
+      ${detailLinesHtml(w)}
       <div class="d-exchange"></div>
       <div class="d-examples"></div>
       <p class="d-meta">今日查询 ${m.today} 次 · 累计查询 ${m.total} 次</p>
@@ -708,6 +750,7 @@
   }
   function saveWordNote(w, text) {
     try {
+      if (!stgCheck()) return false; // 存储未确认：拒绝以读空的基础覆盖全部笔记（数据安全加固）
       const t = String(text || "").replace(/^\s+|\s+$/g, "");
       const notes = JSON.parse(localStorage.getItem("vc-word-notes") || "{}");
       if (!t) delete notes[w]; else notes[w] = { text: t, ts: Date.now() };

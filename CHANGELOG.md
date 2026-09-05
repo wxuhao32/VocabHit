@@ -1,5 +1,138 @@
 ﻿# 更新日志
 
+## v1.3.3（2026-09-05）
+
+Review 新增「回退」与「斩」+ 生词复习计划队列切换：
+
+**一、Review 左上角「回退」按钮（撤销上一步）**
+- 沉浸复习页头部新增拐弯箭头「回退」按钮（返回键右侧）：点击撤销最近一次操作（判断 / 选择题作答 / 下一个 / 记错了 / 拼写提交·跳过 / 斩 / 进入拼写阶段），回到上一张卡片当时的界面与复习状态。
+- 实现：纯内存快照栈（每步压入 reviewSession 深拷贝 + 会话涉及词的 vc-review 词条深拷贝，上限 30 步，不落盘）。回退时整体还原会话与相关词条 → 已发生的 FSRS 结算随词条快照一并还原；复习日志按「词+业务日」幂等合并，回退后重做覆盖同日记录，不重复计入复习次数、不产生重复 FSRS 记录。
+- 第一张卡无可回退历史（或快照栈为空 / 已完成）时按钮置灰不可点；App 重启后历史自然清空（不跨会话回退，保证安全）。
+
+**二、Review 右上角「斩」按钮（替代「娴熟」，复习中唯一移出操作）**
+- 各复习态（回忆 / 详情 / 选择题 / 拼写）右上角新增「斩」字按钮：点击后该词立即移出本次复习队列（三态任务整体移除、wordsDone 阻断结算），不经 answerReview，不产生 FSRS 排期、不计入复习统计。
+- 「娴熟」入口按钮退役：与「斩」功能重复；历史 mastered 毕业数据（nextAt=0）仍被调度层原样豁免，老用户已毕业词不复活，零数据破坏。
+- 持久化：vc-review 词条新增 `slain / slainAt / slainPrevNextAt` 独立字段，nextAt 清零 → 队列、首页计数、提醒快照、算法页排期全部自动排除；学习历史（known/fuzzy/unknown/total/fsrs）与生词本记录零改动，重启后已斩状态保持。
+- 沉浸页头部返回键与「回退」按钮下移微调，「斩」与之同一水平视线（观感严格对齐）。斩卡不触发任何提示音。
+
+**三、生词复习计划新增「队列中生词 / 已斩生词」切换**
+- FSRS 算法 → 生词复习计划页新增与生词页同款分段控件：队列中生词（现有复习计划，已斩词不再显示）｜已斩生词（来自 vc-review 持久化数据，按斩卡时间倒序，显示斩卡日期与 FSRS 记忆状态，点击正常弹出词义卡片）。
+
+**四、兼容性与副作用排查**
+- 未修改 FSRS 核心算法（js/fsrs.js）、任何既有数据结构与持久化机制；新增字段均为可选增量，旧数据初始化 / 迁移 / 备份恢复不受影响。
+- 回退仅在内存栈内还原，不会重复触发 FSRS 更新；斩卡只影响被斩词自身的调度，不改其他单词的 FSRS 状态与复习间隔。
+- 今日生词 / 历史生词 / 生词查询 / 统计 / 任务 / 番茄钟 / 坚持看板 / 悬浮查词零改动。
+
+**五、版本信息**
+- 设置页版本显示更新为 1.3.3（versionCode 102）；缓存戳 `js/app.js?v=55`、`css/style.css?v=40`、`css/spaced-repetition.css?v=10`、`js/spaced-repetition/srUI.js?v=12`；根目录与 Android assets 同步。
+- 注：更新日志中已存在 2026-09-02 的 v1.3.3～v1.3.5 条目（当时未同步设置页版本显示）；本版按需求将版本戳定为 1.3.3，versionCode 单调递增不受影响。
+
+## v1.3.5（2026-09-03）
+
+词性显示标准化 + 悬浮查词条「只剩阴影没有实体」根因修复：
+
+**一、词性统一标准化（a. → adj. 等）**
+- 根因：ECDICT 兜底词典沿用旧词典约定 —— `a.` 表形容词（约 3.7 万条）、`ad.` 表副词、`vbl.` 表动词，而考研词书已是标准 `adj./adv.`；展示层此前原样透传，导致同一页面词性风格不一致（respectful/unregulated 显示 "a."）。
+- 统一规则源：`js/ky-level.js` 新增 `KY.normPos()`（主应用 / 悬浮条 / 导出共用，唯一实现）：
+  - `a. → adj.`、`ad. → adv.`、`vbl. → v.`、`interj. → int.`、`n.n. → n.`；
+  - 复合词性逐段归一（"vt. & vi. & ." → "vt. & vi."、"vi. & ." → "vi."），剔除空段与重复段；
+  - 语域/学科域标签（`[经]`、`<美俚>`）与语义不唯一的标记（na./un./pl./comb./pref./suf./abbr.）原样保留，绝不猜测改写 —— 原本显示正确的词条零变化。
+- 接入点：主应用 `ecdictSenses()`（ECDICT 解析）、`sensesOf()`（考研 senses 透传归一）、悬浮条 `overlay.html ecdictSenses()/sensesOf()`、详情/列表/复习/导出全部经同一规则。
+
+**二、悬浮条「只剩阴影、没有实体」根因修复（OverlayService 生命周期重构）**
+- 根因：悬浮条 = 单窗口（root FrameLayout elevation 阴影 + 透明背景 WebView 绘制胶囊实体）。旧实现隐藏 = 窗口保持挂载 + root 设 `GONE`。App 前后台切换 / 阅读页进出 / IME 焦点翻转叠加 resize 反复触发 GONE→VISIBLE 往返后，部分设备上 **WebView 的嵌入合成层不再恢复绘制**，而 View 层的系统阴影照常画出 —— 即「只有阴影、没有实体、点按无响应」，重新触发 resize 后偶发自愈。
+- 修复（消除该中间态，而非打补丁）：
+  - 隐藏 = **彻底移除窗口**（`wm.removeView`）：不存在任何可绘制残留（无实体也无阴影）；
+  - 显示 = **重新挂载窗口**（WebView 表面全新 attach → Chromium 必然重新合成出实体）；
+  - 隐藏期间页面 `resize` 上报只记录最新尺寸，绝不 attach / updateViewLayout；显示时用最近尺寸挂载（页面未 ready 时等首个 resize，避免默认小窗闪现）；
+  - WebView 与页面状态全程保留（仅 detach 窗口视图），localStorage / 查询现场 / 贴边吸附位置（params）不丢；
+  - 挂载/移除统一走幂等的 `attachIfNeeded()/detachIfNeeded()`，`onDestroy` 复用同一移除路径。
+- 视觉与交互零改动：胶囊样式、拖动、贴边吸附、展开/收起、阅读页复用流程全部不变。
+
+**三、版本信息**
+- 版本 1.3.5（versionCode 101）；缓存戳 `js/app.js?v=51`、`js/ky-level.js?v=4`；根目录与 Android assets 同步。
+
+## v1.3.4（2026-09-02）
+
+移除 Anki 闪卡功能 + 修复部分单词查得到词却无释义的问题：
+
+**一、Anki 闪卡功能完整移除**
+- 删除前端模块 `js/anki/ankiData.js`、`js/anki/ankiUI.js`、样式 `css/anki.css` 及 Android 原生 SQLite 层 `AnkiDb.java`；
+- 移除 `index.html` 中的 Anki 样式与脚本引用；移除 `data-manager.js` 备份白名单中的 `vc-anki-cards` 键；
+- 删除 `MainActivity.java` 内全部 `anki*` 桥接方法（学科/统计/分页/到期队列/导入/复习结算/毕业/删除）；
+- 清理 `srUI` 注入的「Anki 闪卡」入口及运行时页面（ak-hub / page-anki* 等）——不再有空白页、无效按钮、残留入口或对缺失模块的引用；
+- 涉及功能：Anki 学科/牌组管理、闪卡导入（Word/APKG 相关）、Anki 复习与 FSRS 结算、设置入口与导出。
+- 词典、生词、Review、FSRS、知识库间隔重复、任务/坚持看板/统计等既有功能零改动、不受影响。
+
+**二、修复 ECDICT 兜底词「能查到词、显示不出释义」**
+- 根因：`js/ecdict.js` 原生桥读取分片时无条件优先调用 `readDictionaryExt`。Android 端两个桥（MainActivity / OverlayService）都存在该增强方法后，**基础 ECDICT 模块也错误地读入了 `ecdict-ext-<letter>.js`**（仅含 tag/ex/col/词频等增强字段，没有 `s` 释义 / `p` 音标）。
+- 表现：考研词书未收录、只靠 ECDICT 兜底的单词（如 fairness、counselor/counsellor 等派生词、英美拼写变体）在 Android 上能显示单词与标签，却缺音标、缺释义；Web 端走动态 script（按 prefix 正确取文件）不受影响。
+- 修复：`readPart()` 按 `prefix` 选择桥方法 —— 基础词典走 `readDictionary`，增强词典才走 `readDictionaryExt`，无专方法时回退 `readDictionary`。所有 ECDICT-only 词（含派生词、单复数/词形变化、英美拼写差异）统一恢复正常释义，不做任何单词级硬编码。
+- 同步复核：分片懒加载缓存、大小写归一化、`s` 字段解析（词性/语域分行）、详情渲染路径无其它同类问题。
+
+**三、版本信息**
+- 版本 1.3.4（versionCode 100）；缓存戳 `js/app.js?v=50`、`js/ecdict.js?v=2`、`js/data-manager.js?v=7`；根目录与 Android assets 同步。
+
+## v1.3.3（2026-09-02）
+
+修复 v1.3.2「数据安全加固」引入的全局写保护误触发 —— 该问题导致 Review 完成态 / 每日任务 / 坚持看板 / 统计在退出重启后回滚丢失、FSRS/算法页与 Review 状态不一致：
+
+**一、根因**
+- v1.3.2 的 VH_STG 对「键读空」一律按「读取丢失（lost）」处理，未区分两种本质不同的情况：
+  - ① 假就绪 / 存储故障：整库读空；
+  - ② 本键从未创建：各功能键（`vc-review-today` / `vc-review-days` / `vc-pomo-records` / `vc-fsrs-adaptive` / `vc-review-revlogs` / `vc-review-session-v2` 等）只在用户真正使用过对应功能后才写入磁盘。
+- 结果：只要任意一个这类功能键缺失（绝大多数老用户升级后都缺），`safeRead` 就把它标成 failed → `anyTransientFailed()` 为真 → **全局写保护开启，所有模块的 `save` 一律被静默拦截**。
+- 表现与反馈完全吻合：
+  - Review 答题 / 今日完成记录 / 每日打卡 / 统计在看板上的落盘全部被拦截；内存状态照常更新（界面看着一切正常），一旦退出 App 重启即整体回滚，又被要求重新复习；
+  - FSRS/算法页（生词复习计划）直接读 localStorage（磁盘旧数据），与 Review 页内存状态不一致，因而「明明全部完成仍显示今天需复习」；
+  - 连续复习记录 / 每日任务完成状态 / 坚持看板逐日数据同步丢失。
+- 恢复流程同样有洞：`vc-review-today`、`vc-review-session-v2` 等键不在 `loadCoreData()` 的重读范围内，即使存储恢复、真实数据出现，这些键仍长期挂死 failed → 写保护永不解除。
+
+**二、修复**
+- VH_STG 判定升级为「整库空判定」：新增 `anyStorageValue()` 全键探测。
+  - 存储中还有任何真实数据 ⇒ 存储健康，本键读空 = 真不存在（`absent`，正常首次初始化），**绝不判 lost、绝不触发全局写保护**；
+  - 只有「整库读空 + 原生凭据（心跳 size / 快照 review / tasks 任一 > 0，`usedByNative()`）证明本机确曾有过数据」才判 `lost`（写保护 + 后台恢复）—— 这才是假就绪 / 存储故障的真实形态。
+- “曾用过”的 USED hint 不再作为键级证据（`usedByNative()` 已聚合全部计数，且 size=0 时 USED 仍为 true），避免用户删光数据后被永久写保护死锁。
+- 新增 `VH_STG.recheckFailed()`：启动 / 回前台的自动恢复流程对全部暂时性失败键重新判定 —— 存储恢复后真实数据出现即 `ok`，确认真没有即解除标记并恢复正常写入。
+- 本修复同时覆盖依赖 VH_STG 的全部模块（生词/复习/统计/任务/存储库间隔重复/知识库/Math Lab 等），不涉及任何 UI 与 FSRS 算法改动。
+
+**三、版本信息**
+- 版本 1.3.3（versionCode 99）；缓存戳 `js/app.js?v=49`；根目录与 Android assets 同步。
+
+## v1.3.2（2026-09-01）
+
+数据安全加固 v2：修复「偶发启动呈现刚安装状态」的残留竞态（数据从未真正丢失，杀进程重启即恢复）：
+
+**一、根因**
+- Android WebView 冷启动偶发「localStorage 假就绪」：DOM 存储层尚未挂接真实数据文件，读写落在临时空存储上（写入→读回的探针竟能通过），此刻全部核心数据键读空。
+- 前端 VH_STG 保护层已把「读取异常 / 未就绪」判为 unverified（不初始化、不落盘），但「absent（真·新用户）」的判定依赖两个不充分条件：① 写读探针通过（可被假就绪骗过）；② 原生凭据（旧版仅有通知快照）——未开启过通知 / 快照机制上线前的老用户没有任何凭据，此时核心键读空会被误判为「新用户首次使用」，各模块以默认空数据初始化，呈现刚安装状态。
+- 悬浮窗（overlay.html，独立 WebView 上下文）此前完全未接入保护：load() 读取失败后 rollover() 会无条件把空 vc-records 写盘、笔记保存会把整份 vc-word-notes 覆盖为单词条，是确定的空覆盖路径。
+
+**二、修复**
+- 原生持久心跳（新增 `AndroidBridge.markDataUsed(hint)`）：前端核心数据（生词 / 复习）确认装载或落盘成功后，把规模摘要写入原生 SharedPreferences（`vh_data_guard`，不受 WebView 故障影响）。`nativeDataHint()` 合并心跳与通知快照返回 `{used,size,review,tasks}`。
+- VH_STG 判定强化：全部核心用户数据键（vc-records / vc-review / vc-review-revlogs / vc-fsrs-adaptive / vc-stats / vc-tasks 等）读取为空时，只要原生凭据表明本机曾有过数据（心跳规模 / 快照计数任一 > 0），一律判「读取丢失」（unverified：保持内存现状 + 全量写保护），绝不走新用户初始化——写读探针是否通过不再影响该判定。规模仅在确认成功的会话如实上报，用户删光数据后凭据归零不会死锁；首次正常启动即建立心跳，此后永久有效。
+- 悬浮窗存储守卫（overlay.html）：悬浮窗能被拉起 ⇒ 主应用至少运行过一次并写过 vc-overlay 等哨兵键，因此哨兵键全部读不到 = 存储层故障——期间禁止一切写盘（跨天 rollover / 查询记录 / 生词计数 / 单词笔记），每 1.5s 重试装载，哨兵出现（挂接恢复）后自动解除并装入真实数据。堵死「悬浮窗把空生词数据写进磁盘」的确定覆盖路径。
+- Math Lab 预设首次播种判定改走 VH_STG：存储未确认时绝不用内置预设覆盖用户预设。
+- 心跳随 saveRecords / saveReview 落盘同步更新，规模始终反映最新数据量。
+
+**三、版本信息**
+- 版本 1.3.2（versionCode 98）；缓存戳 `js/app.js?v=48`；根目录与 Android assets 同步。
+
+## v1.3.1（2026-09-01）
+
+**一、修复：悬浮条查词缺少考研词义频率分级**
+- 悬浮条（后台悬浮窗）查词详情此前只渲染纯文本释义行，未显示考研词书的「高频 / 中频 / 低频」等级色与熟词僻义「僻」角标，与首页查同一单词的显示不一致。
+- 根因：`overlay.html` 未加载分级模块，且自带一套纯文本释义行渲染（`lines(w)`），绕过了首页使用的 `KY` 分级渲染。
+- 修复方式：**复用首页已验证的实现，不新增数据逻辑**。
+  - `js/ky-level.js` 新增共用渲染入口 `KY.detailHtml(word, fallbackLines, cls)`：命中考研词书 → 逐条等级着色 + 「僻」角标；未命中 → 回退调用方传入的纯文本行（不套色）。
+  - `js/app.js` 的 `detailMeaningsHtml()` 改为调用 `KY.detailHtml()`，首页表现零变化。
+  - `overlay.html` 引入主应用同一份 `css/ky-level.css`、`js/ky-manual.js`、`js/ky-level.js`，详情面板改用 `KY.detailHtml()` 渲染。
+- 约束保持不变：分级标准**仅针对考研词书**；ECDICT（EC）词典数据不参与分级，未命中考研词书时沿用原有释义显示方式；词典优先级仍为「考研优先 → EC 兜底」。
+- 悬浮条其余能力（UI 尺寸/收展、查词流程、加入生词本、查询历史、TTS、词形变化与例句）零改动。
+
+**二、版本信息**
+- 版本 1.3.1（versionCode 97）；缓存戳 `js/ky-level.js?v=3`、`js/app.js?v=47`；根目录与 Android assets 同步。
+
 ## v1.3.0（2026-09-01）
 
 Review 复习引擎全面迁移 FSRS + ECDICT 增强词典（含 1.2.8 / 1.2.9 中间构建的全部变更）：

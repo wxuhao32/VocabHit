@@ -75,31 +75,33 @@
   }
 
   function loadAll() {
-    try {
-      var saved = JSON.parse(localStorage.getItem(SR_KEY) || "null");
-      if (saved && saved.v === 1 && saved.states) {
-        // v1 → v2 → v3：复习模板概念移除 + 六档间隔退役；既有复习进度完整保留
-        store.v = 3;
-        store.states = {};
-        Object.keys(saved.states).forEach(function (id) {
-          var s = saved.states[id];
-          if (!s || !s.id) return;
-          if ("templateId" in s) delete s.templateId;
-          store.states[id] = s;
-        });
-        migrateV2States(saved.intervals);
-        saveAll();
-      } else if (saved && saved.v === 2 && saved.states) {
-        // v2 → v3：六档间隔预设退役 → FSRS 一次性迁移
-        store.v = 3;
-        store.states = saved.states;
-        migrateV2States(saved.intervals);
-        saveAll();
-      } else if (saved && saved.v === 3 && saved.states) {
-        store.v = 3;
-        store.states = saved.states;
-      }
-    } catch (e) { store.states = {}; }
+    /* 数据安全加固：safeRead 区分「真没有」与「暂时没读到」；unverified 时保持
+       内存现状返回（saveAll 写保护拦截），防止空状态覆盖用户知识条目复习进度 */
+    var r = window.VH_STG.safeRead(SR_KEY, null);
+    if (r.status === "unverified") return store;
+    var saved = (r.status === "ok") ? r.value : null;
+    if (saved && saved.v === 1 && saved.states) {
+      // v1 → v2 → v3：复习模板概念移除 + 六档间隔退役；既有复习进度完整保留
+      store.v = 3;
+      store.states = {};
+      Object.keys(saved.states).forEach(function (id) {
+        var s = saved.states[id];
+        if (!s || !s.id) return;
+        if ("templateId" in s) delete s.templateId;
+        store.states[id] = s;
+      });
+      migrateV2States(saved.intervals);
+      saveAll();
+    } else if (saved && saved.v === 2 && saved.states) {
+      // v2 → v3：六档间隔预设退役 → FSRS 一次性迁移
+      store.v = 3;
+      store.states = saved.states;
+      migrateV2States(saved.intervals);
+      saveAll();
+    } else if (saved && saved.v === 3 && saved.states) {
+      store.v = 3;
+      store.states = saved.states;
+    }
     return store;
   }
 
@@ -144,6 +146,7 @@
   }
 
   function saveAll() {
+    if (window.VH_STG.writeBlocked(SR_KEY)) return; // 数据安全加固：读取未确认时拒绝落盘
     try { localStorage.setItem(SR_KEY, JSON.stringify(store)); } catch (e) { /* 存储满忽略 */ }
   }
 

@@ -22,6 +22,7 @@
   var MAX_GAP_MS = 180000; // 单次答题间隔封顶 3 分钟（防挂机虚增时长）
 
   var store = null;
+  var storeVerified = false; // 数据安全加固：store 是否为「确认读取成功」或「确认首次初始化」的结果
   var lastTouch = 0; // 上次复习活动时间戳（会话开始时重置，答题时结算有效时长）
 
   function dayKey(ts) {
@@ -38,16 +39,25 @@
   }
 
   function save() {
+    if (!store || !storeVerified) return; // 数据安全加固：未确认的数据不落盘（防空统计覆盖）
+    if (window.VH_STG && window.VH_STG.writeBlocked && window.VH_STG.writeBlocked(KEY)) return; // 存储层故障/整库读空期间同样拦截，防空统计覆盖
     try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {}
   }
 
   function load() {
-    if (store) return;
-    store = readJSON(KEY, null);
-    if (store && store.days) {
+    if (store && storeVerified) return;
+    /* 数据安全加固：读取未确认（unverified）时保持未初始化状态等待重试；
+       「真·首次使用」的判定要求 absent 且无任何其他未确认键 —— 否则基线会按
+       空数据冻结成 0，把用户真实累计统计永久清零。 */
+    var r = window.VH_STG.safeRead(KEY, null);
+    if (r.status === "unverified") { store = null; storeVerified = false; return; }
+    if (r.status === "ok" && r.value && r.value.days) {
+      store = r.value;
       if (!store.base) store.base = { vocab: 0, entry: 0 };
+      storeVerified = true;
       return;
     }
+    if (r.status !== "absent" || window.VH_STG.anyFailed()) { store = null; storeVerified = false; return; }
     /* 首次初始化：以既有真实数据冻结累计基线（历史无逐日明细，只能取总量） */
     var baseVocab = 0, baseEntry = 0;
     var rv = readJSON(REVIEW_KEY, null);
@@ -59,6 +69,7 @@
       Object.keys(sr.states).forEach(function (id) { baseEntry += sr.states[id].reviewCount || 0; });
     }
     store = { v: 1, base: { vocab: baseVocab, entry: baseEntry }, days: {} };
+    storeVerified = true;
     save();
   }
 
@@ -83,6 +94,7 @@
   /** 记录一次复习活动：vocab=生词复习数 entry=知识条目复习数 sec=有效秒数 */
   function add(delta) {
     load();
+    if (!store) return; // 数据安全加固：统计读取未确认时本次活动不计（宁缺勿错）
     var b = dayBucket(dayKey());
     if (delta) {
       if (delta.vocab) b.v += delta.vocab;
@@ -113,6 +125,7 @@
   /** 卡片数据：今日/累计（词、条、分钟） */
   function snapshot() {
     load();
+    if (!store) return { today: { vocab: 0, entry: 0, min: 0 }, total: { vocab: 0, entry: 0, min: 0 } };
     var today = dayKey();
     var pm = pomoMinutes();
     var tb = store.days[today] || { v: 0, e: 0, sec: 0 };
@@ -136,6 +149,7 @@
       cumMin 永久连续：窗口前所有历史时长（专注+复习）先行累加，再逐日累加窗口内净值 */
   function last7() {
     load();
+    if (!store) return []; // 数据安全加固：统计读取未确认时图表置空（不落任何盘）
     var pm = pomoMinutes();
     var days = [];
     var now = Date.now();

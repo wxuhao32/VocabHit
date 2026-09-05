@@ -40,10 +40,22 @@ function createDictModule(prefix, globalVar) {
           ? window.AndroidOverlay
           : null;
     if (bridge) {
-      // 增强分片优先走 readDictionaryExt；基础分片/无专方法时回退 readDictionary
-      var fn = typeof bridge.readDictionaryExt === "function"
-        ? bridge.readDictionaryExt.bind(bridge)
-        : bridge.readDictionary.bind(bridge);
+      // 【重要】桥接方法必须按 prefix 区分：
+      //   · 基础词典（prefix="ecdict"）→ readDictionary（读 ecdict-<letter>.js，含 p/s）
+      //   · 增强词典（prefix="ecdict-ext"）→ readDictionaryExt（读 ecdict-ext-<letter>.js，
+      //     仅含 tag/ex/col/ox/bnc/frq/eg，没有 s 释义 —— 若基础模块误读该文件，
+      //     词条会「只有单词名、缺音标与释义」）。
+      //   早期实现曾无条件优先 readDictionaryExt，导致 Android 端全部 ECDICT-only
+      //   词查得到词、却显示不出释义；无专方法时（旧桥）才回退 readDictionary。
+      var fn;
+      if (prefix === "ecdict-ext" && typeof bridge.readDictionaryExt === "function") {
+        fn = bridge.readDictionaryExt.bind(bridge);
+      } else if (typeof bridge.readDictionary === "function") {
+        fn = bridge.readDictionary.bind(bridge);
+      } else {
+        fn = null;
+      }
+      if (!fn) return Promise.resolve(null);
       return Promise.resolve(parsePart(fn(letter)));
     }
     return new Promise(function (resolve) {

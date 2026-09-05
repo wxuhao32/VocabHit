@@ -76,6 +76,9 @@ public class OverlayService extends Service {
     private boolean draggable = true;
     private boolean focusable = false;
     private boolean hidden = false; // 主应用在前台时隐藏（避免与应用内悬浮条重复）
+    /** 页面最近一次上报的内容尺寸（px，隐藏期间继续记录）。
+        显示（重新挂载窗口）时用它作为初始窗口尺寸，避免闪现默认小窗。 */
+    private int lastWpx = 0, lastHpx = 0;
     private int edgeSide = 0; // 贴边吸附：0 无 / 1 左 / 2 右
     private ValueAnimator snapAnim;
     /** IME 弹出/收起瞬间（focusable 翻转）→ 短时间内页面 resize 上报的尺寸易出现偏小抖动
@@ -92,9 +95,14 @@ public class OverlayService extends Service {
     };
 
     /** 请求悬浮条可见性（主应用 onResume/onPause 调用）。
-     *  仅当服务已在运行（用户开启过悬浮查词）时下发指令；
-     *  绝不凭此启动服务：未授予悬浮窗权限的设备上启动会在页面就绪后 addView 崩溃，
-     *  表现为「进入首页后过一会儿自动闪退」。 */
+     *  生命周期语义（修复「只剩阴影没有实体」的根因）：
+     *  旧实现隐藏 = 窗口保持挂载 + root 设 GONE。悬浮条实体由 WebView 合成层绘制，
+     *  而阴影由 View 层（elevation + outline）绘制 —— GONE→VISIBLE 往返（App 前后台
+     *  切换/阅读页进出/IME 焦点翻转叠加 resize）后，WebView 的嵌入合成层在部分设备上
+     *  不会恢复绘制，View 层阴影却照常画出 → 表现为「只有阴影、没有实体、点按无响应」。
+     *  新实现：隐藏 = 彻底移除窗口（wm.removeView，不存在任何可绘残留）；
+     *  显示 = 重新挂载窗口（WebView 表面全新 attach，Chromium 必然重新合成出实体）。
+     *  WebView 与页面状态全程保留（仅 detach 窗口视图），localStorage/查询现场不丢。 */
     public static void requestVisibility(Context ctx, boolean show) {
         if (!running) return;
         Intent it = new Intent(ctx, OverlayService.class);
@@ -145,14 +153,18 @@ public class OverlayService extends Service {
     private void setShow(boolean show) {
         hidden = !show;
         main.removeCallbacks(edgeShrink); // 可见性变化时取消挂起的收缩
-        View root = added && webView != null ? (View) webView.getTag() : null;
-        if (root != null) {
-            if (hidden) {
-                webView.evaluateJavascript("window.__back&&window.__back()", null); // 展开态先收起
-                root.setVisibility(View.GONE);
-            } else {
-                root.setVisibility(View.VISIBLE);
-            }
+        if (snapAnim != null) snapAnim.cancel();
+        if (hidden) {
+            // 展开态先收起（页面仍存活，evaluateJavascript 对已 detach 的 WebView 依然有效），
+            // 随后移除窗口 —— 隐藏期间不存在任何可绘制的窗口残留（无实体也无阴影）。
+            if (added && webView != null)
+                webView.evaluateJavascript("window.__back&&window.__back()", null);
+            detachIfNeeded();
+        } else if (!added && webView != null && lastWpx > 0) {
+            // 显示：重新挂载窗口（WebView 表面全新 attach → 实体必然重绘）。
+            // 用页面最近上报的尺寸；页面尚未 ready（无尺寸上报）时等首个 resize 再挂，
+            // 避免用默认小窗抢先挂载造成闪现。
+            attachIfNeeded(lastWpx, lastHpx);
         }
     }
 
@@ -254,7 +266,7 @@ public class OverlayService extends Service {
     }
 
     private void attachIfNeeded(int wPx, int hPx) {
-        if (added) return;
+        if (added || hidden) return; // 隐藏态绝不挂载窗口（不存在「挂着但不可见」的中间态）
         // 首帧窗口给足最小宽度，避免文字折行；页面 ready 后会二次校正到真实尺寸
         // 首次高度同样应用上限钳制（防止首帧页面 offsetHeight 异常大时 addView 一个巨大窗口）
         final int maxH = Math.round(440f * getResources().getDisplayMetrics().density);
@@ -274,8 +286,21 @@ public class OverlayService extends Service {
             stopSelf();
             return;
         }
-        ((View) webView.getTag()).setVisibility(hidden ? View.GONE : View.VISIBLE);
         added = true;
+        positionForState(); // 沿用吸附态/屏内位置（params.x/y 跨挂载保留）
+    }
+
+    /** 移除窗口（隐藏/销毁路径共用）：WebView 与页面状态保留，仅 detach 窗口视图。
+        removeView 后窗口 surface 销毁，不存在任何「阴影残留/透明层」；重新 addView 时
+        WebView 嵌入合成层随新 surface 全新 attach，实体必然重绘。 */
+    private void detachIfNeeded() {
+        if (!added) return;
+        try {
+            wm.removeView((View) webView.getTag());
+        } catch (Exception ignored) {
+            // 视图未挂载/已失效：忽略（added 无论如何置 false，保证状态一致）
+        }
+        added = false;
     }
 
     /** 窗口参数更新兜底：窗口已失效（权限被回收等）时停止服务而非抛异常崩溃 */
@@ -388,7 +413,10 @@ public class OverlayService extends Service {
             final int maxH = Math.round(440f * d);
             final int hFinal = Math.min(Math.max(h, 1), maxH);
             android.util.Log.d("VocabOverlay", "resize" + (force ? "Force" : "") + " " + wCss + "x" + hCss + " -> " + w + "x" + h + " (hFinal " + hFinal + ", maxH " + maxH + ")");
+            lastWpx = w;
+            lastHpx = hFinal; // 隐藏期间页面仍会布局上报：始终记录最新尺寸，供显示时挂载
             main.post(() -> {
+                if (hidden) return; // 隐藏态窗口已移除：只记录尺寸，绝不 attach/updateViewLayout
                 if (!added) { attachIfNeeded(w, hFinal); return; }
                 // IME 抖动忽略（仅非 force）：focusable 翻转后 600ms 内的「偏小」resize 上报视为 IME 抖动误测，
                 // 忽略以避免 params.height 被设小 → 后续内容被 #panel overflow:hidden 截切。
@@ -671,10 +699,7 @@ public class OverlayService extends Service {
         running = false;
         main.removeCallbacks(edgeShrink); // 清理挂起的收缩任务，避免作用于已销毁的 WebView
         if (snapAnim != null) snapAnim.cancel();
-        if (added) {
-            try { wm.removeView((View) webView.getTag()); } catch (Exception ignored) { }
-            added = false;
-        }
+        detachIfNeeded(); // 统一移除路径（幂等）：窗口未挂载时为 no-op
         if (webView != null) webView.destroy();
         if (tts != null) {
             try { tts.stop(); } catch (Exception ignored) { }

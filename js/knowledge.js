@@ -57,22 +57,18 @@
   let activeLibraryId = "default"; // 当前 Repository 页所属存储库（添加知识共用此上下文，缺省即默认库）
 
   function loadStores() {
-    try {
-      const m = JSON.parse(localStorage.getItem(MATERIALS_KEY));
-      if (m && m.v === 1) materials = m;
-    } catch (e) { /* 损坏则重建 */ }
-    try {
-      const r = JSON.parse(localStorage.getItem(REPO_KEY));
-      if (r && (r.v === 1 || r.v === 2)) repo = r;
-    } catch (e) { /* 损坏则重建 */ }
-    try {
-      const h = JSON.parse(localStorage.getItem(HIGHLIGHTS_KEY));
-      if (h) highlights = h;
-    } catch (e) { /* 损坏则重建 */ }
-    try {
-      const ms = JSON.parse(localStorage.getItem(MISTAKES_KEY));
-      if (ms && ms.v === 1) mistakes = ms;
-    } catch (e) { /* 损坏则重建 */ }
+    /* 数据安全加固：safeRead 严格区分「真没有(absent)」与「暂时没读到(unverified)」。
+       unverified 时保持内存现状，写入由 saveXxx 的写保护拦截 ——
+       尤其杜绝 migrateRepoToLibraries 无条件 saveRepo 用空默认库覆盖用户存储库。 */
+    const m = VH_STG.safeRead(MATERIALS_KEY, null);
+    if (m.status === "ok" && m.value && m.value.v === 1) materials = m.value;
+    const r = VH_STG.safeRead(REPO_KEY, null);
+    if (r.status === "ok" && r.value && (r.value.v === 1 || r.value.v === 2)) repo = r.value;
+    const h = VH_STG.safeRead(HIGHLIGHTS_KEY, null);
+    if (h.status === "ok" && h.value) highlights = h.value;
+    const ms = VH_STG.safeRead(MISTAKES_KEY, null);
+    if (ms.status === "ok" && ms.value && ms.value.v === 1) mistakes = ms.value;
+    if (VH_STG.isFailed(REPO_KEY)) return; // 存储库未确认：跳过迁移（防空默认覆盖）
     migrateRepoToLibraries(); // v0.9.0：旧版 Repository 数据自动归入「默认库」，无任何丢失
     migrateCustomLibsNoPreset(); // v0.9.1：预设类型仅属于默认库，自定义库存量引用自动转为同名自定义类型
   }
@@ -119,18 +115,22 @@
   /* 存储超额保护：写入失败（空间不足等）不抛异常、不崩溃，统一 Toast 提示并返回 false；
      调用方据此跳过成功态 UI（列表渲染 / 角标 / 数量），保证界面与磁盘数据一致 */
   function saveMaterials() {
+    if (VH_STG.writeBlocked(MATERIALS_KEY)) return false; // 数据安全加固：读取未确认时拒绝落盘
     try { localStorage.setItem(MATERIALS_KEY, JSON.stringify(materials)); return true; }
     catch (e) { showToast(STORAGE_FULL_MSG); return false; }
   }
   function saveRepo() {
+    if (VH_STG.writeBlocked(REPO_KEY)) return false; // 数据安全加固：读取未确认时拒绝落盘
     try { localStorage.setItem(REPO_KEY, JSON.stringify(repo)); return true; }
     catch (e) { showToast(STORAGE_FULL_MSG); return false; }
   }
   function saveHighlights() {
+    if (VH_STG.writeBlocked(HIGHLIGHTS_KEY)) return false; // 数据安全加固：读取未确认时拒绝落盘
     try { localStorage.setItem(HIGHLIGHTS_KEY, JSON.stringify(highlights)); return true; }
     catch (e) { showToast(STORAGE_FULL_MSG); return false; }
   }
   function saveMistakes() {
+    if (VH_STG.writeBlocked(MISTAKES_KEY)) return false; // 数据安全加固：读取未确认时拒绝落盘
     try { localStorage.setItem(MISTAKES_KEY, JSON.stringify(mistakes)); return true; }
     catch (e) { showToast(STORAGE_FULL_MSG); return false; }
   }
@@ -430,14 +430,23 @@
         </div>
         <div class="kn-sheet-body">
           <p class="field-label">核心内容</p>
-          <textarea class="kn-textarea" id="kn-content" rows="3" placeholder="选中的原文（可修改）"></textarea>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="kn-content" rows="3" placeholder="选中的原文（可修改）"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="kn-content" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
 
           <p class="field-label kn-field-gap">中文解释 · 可选</p>
-          <textarea class="kn-textarea" id="kn-explain" rows="2" placeholder="手动输入，或点击下方从原文选择"></textarea>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="kn-explain" rows="2" placeholder="手动输入，或点击下方从原文选择"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="kn-explain" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
           <button class="kn-pick-btn" id="kn-pick-explain" type="button">${DOC_SVG} 从原文选择解释</button>
 
           <p class="field-label kn-field-gap">上下文 · 可选</p>
-          <textarea class="kn-textarea" id="kn-context" rows="2" placeholder="手动输入，或点击下方从原文选择"></textarea>
+          <div class="mis-ta-wrap">
+            <textarea class="kn-textarea" id="kn-context" rows="2" placeholder="手动输入，或点击下方从原文选择"></textarea>
+            <button class="mis-expand-btn" type="button" data-target="kn-context" aria-label="展开输入">${EXPAND_SVG}</button>
+          </div>
           <button class="kn-pick-btn" id="kn-pick-context" type="button">${DOC_SVG} 从原文选择上下文</button>
 
           <p class="field-label kn-field-gap">所属 Repository</p>
@@ -1306,6 +1315,7 @@
 
   function closeEditor() {
     if (!editorState.open) return;
+    closeMisExpand(); // 防御：知识条目展开编辑区若开着随面板一并关闭（内容已回写输入框）
     $("#kn-overlay").classList.remove("visible");
     $("#kn-sheet").classList.remove("open");
     $("#kn-sheet").setAttribute("aria-hidden", "true");
@@ -1973,19 +1983,24 @@
 
   /* ---------- 展开输入：长文大面积编辑（内容与面板对应输入框双向同步） ----------
      点输入框右下角「展开」→ 全屏独立编辑区；「完成」/点遮罩/返回键均把内容
-     回写原输入框，任何路径关闭都不丢字；保存流程与数据结构完全不变。 */
+     回写原输入框，任何路径关闭都不丢字；保存流程与数据结构完全不变。
+     错题编辑与知识条目编辑（核心内容/中文解释/上下文）共用同一展开层。 */
 
   const MIS_FIELD_TITLES = {
     "mis-question": "错题文字",
     "mis-answer": "正确解答",
     "mis-reason": "错因",
-    "mis-idea": "思路"
+    "mis-idea": "思路",
+    "kn-content": "核心内容",
+    "kn-explain": "中文解释",
+    "kn-context": "上下文"
   };
   let misExpandSrc = null; // 当前展开来源输入框（null = 未展开）
 
   function openMisExpand(targetId) {
     const src = document.getElementById(targetId);
-    if (!src || !misEditor.open || misExpandSrc) return;
+    const sheet = src ? src.closest(".sheet") : null; // 来源输入框所在面板（错题 / 知识条目）
+    if (!src || !sheet || !sheet.classList.contains("open") || misExpandSrc) return;
     misExpandSrc = src;
     $("#mis-expand-title").textContent = MIS_FIELD_TITLES[targetId] || "文字";
     const ta = $("#mis-expand-ta");
@@ -2413,7 +2428,8 @@
     });
     $("#mis-save").addEventListener("click", saveMistake);
     // 展开输入：对应输入框进入全屏大面积编辑（内容完整保留，关闭时回写）
-    document.querySelectorAll("#mis-sheet .mis-expand-btn").forEach((btn) =>
+    // 错题面板与知识条目面板（核心内容/中文解释/上下文）共用同一展开层
+    document.querySelectorAll("#mis-sheet .mis-expand-btn, #kn-sheet .mis-expand-btn").forEach((btn) =>
       btn.addEventListener("click", () => openMisExpand(btn.dataset.target)));
     $("#mis-expand-done").addEventListener("click", closeMisExpand);
     $("#mis-expand-mask").addEventListener("click", (e) => {
@@ -2455,8 +2471,8 @@
       exitSelectMode(selMode === "explanation" || selMode === "context");
       return true;
     }
+    if (misExpandSrc) { closeMisExpand(); return true; } // 展开输入（错题/知识条目共用）：先关大面积编辑再回面板，内容不丢
     if (editorState.open) { closeEditor(); return true; }
-    if (misExpandSrc) { closeMisExpand(); return true; } // 错题展开输入：先关大面积编辑再回面板，内容不丢
     if (misEditor.open) { closeMisSheet(); return true; } // 错题编辑面板：回收未保存的新图
     // 最上层输入确认弹窗先关闭（类型/科目删除确认、新建库、添加科目）
     const dlg = document.getElementById("kn-namedlg-mask") || document.getElementById("kn-catdel-mask");
@@ -2493,6 +2509,8 @@
     openRepoLibrary: openRepoLibrary,
     openReader: openReader,
     registerParser: registerParser,
+    /* 数据安全加固：启动期存储读取未确认时，由 app.js 恢复流程调用重读 */
+    reload: function () { loadStores(); updateHomeBadges(); },
     get materials() { return materials; },
     get repo() { return repo; },
     get mistakes() { return mistakes; }

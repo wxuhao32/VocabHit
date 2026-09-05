@@ -159,6 +159,12 @@
 
 /* ---------- 生词复习计划 ---------- */
 
+/* 队列中生词 / 已斩生词 同页 Segmented 切换（复用全局 .segmented/.seg-btn，
+   视觉对齐库页 .sr-lib-seg 与生词页 words-seg） */
+.sr-vocab-seg { margin-top: 2px; }
+/* 副标题与切换控件保持呼吸间距（同 #sr-lib-subtitle 的处理） */
+#page-sr-vocab .page-subtitle { margin-top: 10px; margin-bottom: 12px; }
+
 .sr-vocab-list { display: flex; flex-direction: column; gap: 8px; }
 .sr-vocab-row {
   display: flex;
@@ -203,6 +209,8 @@
 .sr-vocab-time { flex: none; font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .sr-vocab-time.due { color: #FF3B30; font-weight: 600; }
 html[data-theme="dark"] .sr-vocab-time.due { color: #FF453A; }
+/* 已斩生词右侧标签：弱化灰字，不与到期红色混淆 */
+.sr-vocab-time.sr-vocab-slain { color: var(--text-3); }
 
 @keyframes srRowIn {
   from { opacity: 0; transform: translateY(6px); }
@@ -611,23 +619,33 @@ html[data-theme="dark"] .sr-q-banner.bad { color: #FF453A; }
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 14px 16px calc(20px + var(--sab, 0px));
-  background: var(--bg);
+  overflow-y: auto;
+  justify-content: flex-start;
+  gap: 14px;
+  padding: 16px 16px calc(20px + var(--sab, 0px));
+  /* 背景透出：与首页一致显示全局 #app-bg 插画（body.has-app-bg 时 .app 已透明）；
+     无图片背景时由 .app 的 var(--bg) 兜底，主题色不变 */
+  background: transparent;
 }
 
+/* 进度头部：独立圆角卡片，悬浮于页面背景上（与设置页卡片同语言） */
 .sr-rv-head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: 12px;
-  flex: none;
-  padding: 2px 0 14px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
 }
 .sr-rv-exit {
   flex: none;
   width: 34px;
   height: 34px;
   border-radius: 11px;
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--hairline);
   color: var(--text-2);
   display: flex;
@@ -646,17 +664,14 @@ html[data-theme="dark"] .sr-q-banner.bad { color: #FF453A; }
 .sr-rv-progressbar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); transition: width var(--t-med) var(--ease); }
 
 .sr-rv-card {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  flex: none;
   display: flex;
   flex-direction: column;
-  justify-content: center;
   gap: 14px;
-  padding: 26px 20px;
+  padding: 20px 18px;
   background: var(--surface);
   border: 1px solid var(--hairline);
-  border-radius: 22px;
+  border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
 }
 .sr-rv-tag {
@@ -763,7 +778,7 @@ html[data-theme="dark"] .sr-cloze-banner.bad { color: #FF453A; }
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 9px;
-  margin-top: 14px;
+  margin-top: 4px;
   animation: srRowIn var(--t-med) var(--ease);
 }
 .sr-rv-btn {
@@ -811,15 +826,50 @@ html[data-theme="dark"] .sr-rv-forgot { background: #FF453A; }
 }
 .sr-rv-mastered:active { color: var(--accent); border-color: var(--accent); }
 
+/* 提问型 / 挖空型作答：提交答案 · 不会 · 已经很熟 三个按钮同一行横向并排。
+   提交答案（主操作）绿色底；不会 / 已经很熟 保持次要操作层级；小屏内文字自适应收紧。 */
+.sr-rv-actions-trio { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.sr-rv-actions-trio .sr-rv-next {
+  grid-column: auto;
+  height: 48px;
+  padding: 0 4px;
+  border-radius: 15px;
+  background: #34C759;
+  color: #fff;
+  font-size: 14px;
+}
+html[data-theme="dark"] .sr-rv-actions-trio .sr-rv-next { background: #30D158; }
+.sr-rv-actions-trio .sr-rv-btn {
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 14px;
+}
+.sr-rv-actions-trio .sr-rv-mastered {
+  grid-column: auto;
+  height: 48px;
+  min-width: 0;
+  padding: 0 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.15;
+  white-space: normal;
+  font-size: 11.5px;
+}
+
 /* 复习完成页 */
 .sr-rv-done {
-  flex: 1;
+  flex: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 30px 20px;
+  padding: 38px 24px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
   text-align: center;
 }
 .sr-rv-done-check {

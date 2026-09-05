@@ -9,7 +9,7 @@
    算法：FSRS（DSR 模型：Difficulty / Stability / Retrievability）
    实现基线：FSRS-5 核心（19 个默认参数 w0–w18，含短期稳定性 w17/w18），
    幂遗忘曲线 R(t,S) = (1 + FACTOR·t/S)^DECAY，DECAY = -0.5。
-   参数与公式对齐 open-spaced-repetition/fsrs-rs（Anki 内置同源算法）。
+   参数与公式对齐 FSRS 官方实现（open-spaced-repetition/fsrs-rs）。
    ============================================================
    记忆状态字段（存于 reviewStore.words[w].fsrs）：
      s      稳定性 Stability：记忆半衰期，单位天（R 衰减到 0.9 所需天数）
@@ -33,7 +33,7 @@
       w15     Hard 惩罚系数
       w16     Easy 奖励系数
       w17–w18 短期（同日）稳定性：基数 / 评分偏移
-      注：均 > 0，因此允许短期间隔（与 Anki 的 params[17]>0 && params[18]>0 判定一致） */
+      注：均 > 0，因此允许短期间隔（与官方 FSRS 的 params[17]>0 && params[18]>0 判定一致） */
   var DEFAULT_PARAMS = [
     0.40255, 1.18385, 3.173, 15.69105,
     7.1949, 0.5345, 1.4604, 0.0046,

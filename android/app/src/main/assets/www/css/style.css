@@ -1137,10 +1137,10 @@ span.task-check.exp-check.checked { background: var(--accent); border-color: var
   position: fixed;
   left: 50%;
   transform: translateX(-50%);
-  /* 悬浮间距 12px 叠安全区 --sab（系统导航栏/手势条）与键盘 --ime（原生注入）：
-     窗口恒全屏（ADJUST_NOTHING）下，键盘弹出时浮岛稳定浮在其上方，
-     不钻入输入区域、不异常跳动；收起后回落原位 */
-  bottom: calc(12px + var(--sab) + var(--ime));
+  /* 悬浮间距 12px 叠安全区 --sab（系统导航栏/手势条）。
+     固定忽略 --ime：窗口恒全屏（ADJUST_NOTHING）下，键盘弹出时浮岛保持正常底部
+     导航位置与层级，不被键盘顶起；键盘悬浮覆盖其上，任意页面一致行为 */
+  bottom: calc(12px + var(--sab));
   /* 430 取景框内左右各留 14px，两侧均衡；小屏同比例收窄 */
   width: min(calc(430px - 28px), calc(100vw - 28px));
   display: flex;
@@ -1182,7 +1182,7 @@ span.task-check.exp-check.checked { background: var(--accent); border-color: var
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(116px + var(--sab) + var(--ime)); /* 悬浮胶囊导航上方 */
+  bottom: calc(116px + var(--sab)); /* 悬浮胶囊导航上方，固定不随键盘跳动 */
   transform: translateX(-50%) translateY(8px);
   background: var(--text);
   color: var(--bg);
@@ -1316,10 +1316,10 @@ body.review-active #page-review {
   body.review-active #page-review { box-shadow: 0 0 0 1px var(--hairline); }
 }
 
-/* 沉浸头部：仅保留悬浮返回按钮（左上），标题/清空隐藏 */
+/* 沉浸头部：悬浮返回按钮（左上）+「回退」按钮（返回键右侧）；标题/清空隐藏 */
 body.review-active #page-review .page-header {
   position: absolute;
-  top: calc(var(--sat) + 10px);
+  top: calc(var(--sat) + 24px);
   left: 16px;
   right: 16px;
   z-index: 30;
@@ -1328,11 +1328,31 @@ body.review-active #page-review .page-header {
   border-bottom: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 10px;
   pointer-events: none;
 }
 body.review-active #page-review .page-header .page-title,
 body.review-active #page-review .page-header-action { display: none; }
+/* 「回退」按钮：仅 Review 沉浸模式显示（非沉浸时隐藏，不出现在空状态/完成页） */
+#review-undo { display: none; }
+body.review-active #page-review #review-undo {
+  display: flex;
+  pointer-events: auto;
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--rv-glass);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--hairline);
+  color: var(--text-2);
+  box-shadow: none;
+  transition: background var(--t-fast) ease, transform var(--t-fast) var(--ease), opacity var(--t-fast) ease;
+}
 body.review-active #page-review .back-btn {
   pointer-events: auto;
   width: 36px;
@@ -1353,6 +1373,15 @@ body.review-active #page-review .back-btn {
 body.review-active #page-review .back-btn:active {
   background: var(--rv-glass-active);
   transform: scale(0.9);
+}
+body.review-active #page-review #review-undo:active {
+  background: var(--rv-glass-active);
+  transform: scale(0.9);
+}
+/* 无可回退历史（第一张卡 / 快照栈为空）时置灰且不可点 */
+body.review-active #page-review #review-undo:disabled {
+  opacity: 0.35;
+  pointer-events: none;
 }
 
 /* ---------- 顶部进度区（极细进度条 + 轻量计数，悬于内容之上） ---------- */
@@ -1401,19 +1430,25 @@ body.review-active #page-review .back-btn:active {
    旧屏克隆为「翻出页」盖在新屏上，以左缘为轴向右轻旋揭走；新屏垫底旋入就位 */
 .rv-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
-/* 「娴熟」毕业按钮：各复习态右上角灰色小字。
-   点击后该词彻底退出 Review 调度（FSRS 不再排期），生词本与学习历史保留。 */
-.rv-mastered {
+/* 复习卡右上角操作区：「斩」（与左上角返回/回退悬浮按钮严格同一水平中线） */
+.rv-top-actions {
   position: absolute;
-  top: 6px;
-  right: 16px;
+  top: 18px;
+  right: 12px;
   z-index: 3;
+  display: flex;
+  align-items: center;
+}
+
+/* 「斩」按钮：右上角简洁斩字，点击后该词持久化标记已斩、
+   立即移出本次复习队列且 FSRS 不再排期；生词本记录与学习历史保留 */
+.rv-slash {
   padding: 6px 10px;
   border: 0;
   background: transparent;
   color: var(--text-3);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 580;
   letter-spacing: 0.5px;
   line-height: 1;
   border-radius: 8px;
@@ -1421,7 +1456,7 @@ body.review-active #page-review .back-btn:active {
   -webkit-tap-highlight-color: transparent;
   transition: opacity 0.12s ease;
 }
-.rv-mastered:active { opacity: 0.55; }
+.rv-slash:active { opacity: 0.55; }
 
 /* 翻出页：不透明背景（与页面同色），避免翻起时透出下层新页；不响应交互 */
 .review-body > .rv-flip-out {

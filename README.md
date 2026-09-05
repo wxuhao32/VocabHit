@@ -2,7 +2,7 @@
 
 **考研向 · 本地优先 · 纯离线** 的英语学习 App：查词、生词、FSRS 间隔复习、知识库、错题本、Math Canvas、番茄钟、任务打卡、悬浮窗查词、学习提醒，一个 APK 全部搞定。
 
-- 当前版本：**v1.3.0**（versionCode 96）
+- 当前版本：**v1.3.1**（versionCode 97）
 - 运行环境：Android 8.0+（minSdk 26 / targetSdk 34）
 - 技术形态：纯 HTML/CSS/JS 前端 + Android WebView 壳，**零第三方运行时框架、零 npm 依赖**
 - 分发形态：单个 APK，词典随包分发，**装完即可离线使用**

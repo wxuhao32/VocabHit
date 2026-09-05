@@ -67,10 +67,21 @@
   }
 
   function loadAll() {
+    /* 数据安全加固：firstInit 判定走 VH_STG（区分「真没有」与「暂时没读到」）——
+       WebView 存储层偶发故障时绝不用内置预设覆盖用户预设；未确认期间保持内存现状，
+       下次打开 Math Lab 时自动重读。 */
+    var guard = window.VH_STG || null;
     var firstInit = false;
-    try { firstInit = localStorage.getItem(KEY_PRESETS) === null; } catch (e) { firstInit = true; }
+    if (guard) {
+      var r = guard.safeRead(KEY_PRESETS, null);
+      if (r.status === "unverified") return;
+      firstInit = (r.status === "absent");
+    } else {
+      try { firstInit = localStorage.getItem(KEY_PRESETS) === null; } catch (e) { firstInit = true; }
+    }
     presets = readStore(KEY_PRESETS, presets);
     if (firstInit && presets.items.length === 0) {
+      if (guard && guard.writeBlocked(KEY_PRESETS)) return; // 未确认：不播种不落盘（双保险）
       presets.items = builtinPresets(); // 示例预设：可改可删，删后不再复活
       writeStore(KEY_PRESETS, presets);
     }

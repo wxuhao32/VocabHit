@@ -85,6 +85,13 @@ function reverseSearch(q, limit = 30) {
   return [...exact, ...prefix, ...contain].slice(0, limit);
 }
 
+/** 词性标准化（规则源在 js/ky-level.js 的 KY.normPos，主应用/悬浮条/导出共用）：
+    ECDICT 旧式标记（a.→adj. / ad.→adv. / vbl.→v. 等）与考研词书脏数据
+    （"vi. & ."、"n.n."）在展示层统一归一，语域/学科域标签原样保留 */
+function normPosOf(pos) {
+  return window.KY && KY.normPos ? KY.normPos(pos) : String(pos || "").trim();
+}
+
 /** ECDICT 词条（{p,s}）→ 与考研词书一致的 senses 结构 [[pos, [释义]]]；s 按行解析，行首词性/域标记为 pos */
 function ecdictSenses(entry) {
   if (!entry || !entry.s) return [];
@@ -92,14 +99,17 @@ function ecdictSenses(entry) {
     ln = ln.trim();
     if (!ln) return ["", []];
     const m = ln.match(/^((?:\[[^\]\n]{1,20}\]|[a-z]{1,8}\.)\s*)(.*)$/i);
-    if (m) return [m[1].trim(), [m[2] || ln]];
+    if (m) return [normPosOf(m[1].trim()), [m[2] || ln]];
     return ["", [ln]];
   }).filter(([, defs]) => defs.length);
 }
 
-/** 词条释义行结构（考研 senses 或 ECDICT 转 senses） */
+/** 词条释义行结构（考研 senses 或 ECDICT 转 senses）。
+    考研词书 pos 同样过标准化（修复个别脏数据 "vi. & ." / "n.n." 的展示，
+    已标准的 adj./n./vt. 等原样透传，零变化） */
 function sensesOf(d) {
-  return d && d.senses ? d.senses : ecdictSenses(d);
+  if (d && d.senses) return d.senses.map(([pos, defs]) => [normPosOf(pos), defs]);
+  return ecdictSenses(d);
 }
 
 /** 词条格式化：首个词性组 → "adj. 临时的；暂时的" */
@@ -121,11 +131,10 @@ function senseLines(word) {
     考研词书 → 每行「词性 + 逐条等级着色释义 + 「僻」角标」（全局同一套等级数据）；
     ECDICT / 其他来源 → 保持原有纯文本释义行（本功能不涉及）。 */
 function detailMeaningsHtml(word) {
-  const g = window.KY ? KY.kyLevel(word) : null;
-  if (!g) return senseLines(word).map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("");
-  return g.rows.map((row) =>
-    `<p class="detail-meaning">${row.pos ? `${esc(row.pos)} ` : ""}${KY.kyJoin(row.meanings)}</p>`
-  ).join("");
+  const lines = senseLines(word);
+  return window.KY
+    ? KY.detailHtml(word, lines, "detail-meaning")
+    : lines.map((l) => `<p class="detail-meaning">${esc(l)}</p>`).join("");
 }
 
 function phoneticOf(word) {
@@ -167,10 +176,13 @@ function businessDayAt(dayOffset, now = Date.now()) {
 }
 
 function loadRecords() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
-    if (saved && saved.words) records = saved;
-  } catch (_) { /* 损坏数据忽略 */ }
+  /* 数据安全加固：读取必须确认成功（ok/absent）才允许迁移与落盘。
+     unverified（读取异常/读取丢失/存储未就绪）时保持内存现状并直接返回——
+     绝不能让「暂时没读到」走新用户初始化，否则 rolloverIfNeeded 会用空数据覆盖磁盘。 */
+  const r = VH_STG.safeRead(STORE_KEY, VH_STG.HINT.USED);
+  if (r.status === "unverified") return;
+  const saved = r.value;
+  if (saved && saved.words) records = saved;
   migrateLegacyStarred();
   migrateQueryCounters();
   if (trimHistory()) saveRecords();
@@ -216,7 +228,14 @@ function migrateLegacyStarred() {
 }
 
 function saveRecords() {
-  localStorage.setItem(STORE_KEY, JSON.stringify(records));
+  /* 数据安全加固：读取未确认时拒绝落盘（防空数据覆盖）；写入异常不再向上抛，
+     避免初始化链中断（未写成功的跨天重置等会在下次成功读取后自然补做） */
+  if (VH_STG.writeBlocked(STORE_KEY)) return false;
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(records));
+    vhMarkUsed(); // 心跳随数据规模更新（写入成功 = 确认会话，规模可信）
+    return true;
+  } catch (e) { console.warn("[saveRecords] write failed", e); return false; }
 }
 
 /** 跨天重置：仅今日生词计数（today）与今日统计数据清零；查询记录永久保留、累计次数不清零 */
@@ -553,14 +572,17 @@ const R_INTERVALS = [0, 3, 7, 10, 20, 30, 30];
 let reviewStore = { words: {} };
 
 function loadReview() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(REVIEW_KEY) || "null");
-    if (saved && saved.words) reviewStore = saved;
-  } catch (_) { /* 损坏数据忽略 */ }
+  /* 数据安全加固：unverified 时保持内存现状返回（快照凭据 HINT.REVIEW 由原生通知快照佐证），
+     防止 migrateReview 用重建条目覆盖用户真实 FSRS 复习状态 */
+  const r = VH_STG.safeRead(REVIEW_KEY, VH_STG.HINT.REVIEW);
+  if (r.status === "ok" && r.value && r.value.words) reviewStore = r.value;
 }
 
 function saveReview() {
-  localStorage.setItem(REVIEW_KEY, JSON.stringify(reviewStore));
+  if (VH_STG.writeBlocked(REVIEW_KEY)) return; // 读取未确认：禁止空/半空复习状态覆盖磁盘
+  try { localStorage.setItem(REVIEW_KEY, JSON.stringify(reviewStore)); }
+  catch (e) { console.warn("[saveReview] write failed", e); return; }
+  vhMarkUsed(); // 心跳随数据规模更新（写入成功 = 确认会话，规模可信）
   pushReminderState(); // 通知提醒：复习进度变化 → 同步快照给原生（到点判断是否已复习完）
 }
 
@@ -592,6 +614,9 @@ function ensureReviewEntry(w) {
 
 /** 老数据迁移：已有历史生词无复习状态 → 按「首次加入日期」安排首次复习（当天加入的明天，老词立即） */
 function migrateReview() {
+  /* 数据安全加固：生词本或复习数据任一未确认时跳过 —— 否则「暂时没读到」的空数据
+     会触发整批重建，把用户真实 FSRS 状态改写为全新条目 */
+  if (VH_STG.isFailed(STORE_KEY) || VH_STG.isFailed(REVIEW_KEY)) return;
   let changed = false;
   for (const w of Object.keys(records.words)) {
     if (!reviewStore.words[w] && records.words[w].starred) {
@@ -615,6 +640,9 @@ function migrateReview() {
  * 包括待复习队列 / 后续计划 / 全部 Review 状态，杜绝历史脏数据残留。
  */
 function syncReviewWithWords() {
+  /* 数据安全加固：生词本或复习数据任一未确认时跳过同步 ——
+     否则空 records 会把 reviewStore 整体判成脏数据删除后落盘 */
+  if (VH_STG.isFailed(STORE_KEY) || VH_STG.isFailed(REVIEW_KEY)) return;
   let changed = false;
   for (const w of Object.keys(reviewStore.words)) {
     const r = records.words[w];
@@ -646,11 +674,13 @@ function clearReviewQueue() {
   showToast("已清空复习队列");
 }
 
-/** 待复习队列：生词本内且 nextAt 到期的词（按 nextAt 升序）；移出生词本的词不再安排复习 */
+/** 待复习队列：生词本内且 nextAt 到期的词（按 nextAt 升序）；移出生词本的词不再安排复习。
+    已「斩」的词双重排除：nextAt 已清零（同「娴熟」），且 slain 标记兜底过滤 */
 function reviewQueue() {
   const now = Date.now();
   return Object.keys(reviewStore.words)
-    .filter((w) => isStarred(w) && reviewStore.words[w].nextAt > 0 && reviewStore.words[w].nextAt <= now)
+    .filter((w) => isStarred(w) && !reviewStore.words[w].slain
+      && reviewStore.words[w].nextAt > 0 && reviewStore.words[w].nextAt <= now)
     .sort((a, b) => reviewStore.words[a].nextAt - reviewStore.words[b].nextAt);
 }
 
@@ -710,20 +740,19 @@ function migrateLegacyIntervalsToFsrs() {
   if (changed) saveReview();
 }
 
-/** 是否已标记「娴熟」毕业（已毕业的词不再进入 Review 队列） */
+/** 是否已标记「娴熟」（旧版本毕业数据：已毕业的词不再进入 Review 队列）。
+    v1.3.3 起「娴熟」复习入口按钮已退役（与「斩」重复），但历史 mastered 数据
+    （nextAt=0 + mastered 标记）仍被调度层原样豁免，老用户毕业词不复活。 */
 function isReviewMastered(word) {
   const st = reviewStore.words[word];
   return !!(st && st.mastered);
 }
 
-/** 「娴熟」毕业：当前单词彻底退出 Review 调度。
+/** 「娴熟」毕业数据层操作（历史兼容保留；1.3.3 起无 UI 入口）。
     · 标记 mastered 并把 nextAt 清零 → reviewQueue() 的 nextAt>0 过滤直接排除，
       之后 FSRS 调度不会再安排该词
     · 不删除生词本记录（records.words[w].starred 保持不变）
-    · 不删除任何学习历史（known/fuzzy/unknown/total/fsrs 全部保留，可随时查看）
-    · ensureReviewEntry 对已存在条目幂等返回；migrateReview 只为「无复习状态」的词建条
-      → 已毕业词不会因迁移而复活
-    · 设置 → 自适应间隔算法 → 生词本 同样按 nextAt>0 过滤 → 已毕业词不再显示排期 */
+    · 不删除任何学习历史（known/fuzzy/unknown/total/fsrs 全部保留，可随时查看） */
 function reviewMastered(word) {
   const st = reviewStore.words[word];
   if (!st) return;
@@ -733,17 +762,43 @@ function reviewMastered(word) {
   saveReview();
 }
 
-/** Review 会话内点击「娴熟」：标记毕业 + 跳过该词剩余全部任务并前进。
+/** 是否已标记「斩」（已斩的词彻底退出 Review 调度，与「娴熟」同机制但状态独立） */
+function isReviewSlain(word) {
+  const st = reviewStore.words[word];
+  return !!(st && st.slain);
+}
+
+/** 「斩」：当前单词彻底退出 Review 调度（持久化，重启后仍生效）。
+    · 标记 slain + 记录 slainAt；nextAt 清零 → reviewQueue() 的过滤直接排除，
+      之后 FSRS 调度不会再安排该词（同「娴熟」毕业机制，但状态字段独立）
+    · 原排期暂存 slainPrevNextAt（不覆盖任何学习历史字段）
+    · 不删除生词本记录与全部学习历史（known/fuzzy/unknown/total/fsrs 原样保留）
+    · 幂等：重复斩同一词不产生副作用 */
+function reviewSlashWord(word) {
+  const st = reviewStore.words[word];
+  if (!st) return;
+  if (!st.slain) {
+    st.slain = true;
+    st.slainAt = Date.now();
+    st.slainPrevNextAt = st.nextAt;
+  }
+  st.nextAt = 0;
+  saveReview();
+}
+
+/** Review 会话内点击「斩」：标记已斩 + 立即把该词从当前复习队列移除并前进。
     覆盖三处入口：词义回忆页 / 词义详情页 / 选择题页（Phase 1）与拼写页（Phase 2）。
-    毕业的词不进入 answerReview 结算（不再产生新的 FSRS 排期）。 */
-function reviewMasteredFromSession() {
+    斩掉的词不经 answerReview 结算（不产生新的 FSRS 排期、不计入复习统计），
+    与「娴熟」同一套移除路径（completed 三态置位 + wordsDone 阻断结算 + 任务池移除）。 */
+function reviewSlashFromSession() {
   const word = reviewSession.current;
   if (!word) return;
-  reviewMastered(word);
+  pushRvHistory(); // 回退可撤销本次斩（恢复斩前状态与队列）
+  reviewSlashWord(word);
+  showToast("已斩 · 该词不再出现在复习中");
 
   if (reviewSession.phase === "spell") {
-    // 拼写阶段：「娴熟」= 彻底毕业 → 当前进度（spellIdx）不变，
-    // 该词从拼写队列移除（总进度 -1），不再出现。
+    // 拼写阶段：当前进度（spellIdx）不变，该词从拼写队列移除（总进度 -1），不再出现
     ttsStop();
     reviewSession.spellQueue = reviewSession.spellQueue.filter((w) => w !== word);
     reviewSession.spell = { submitted: false, correct: false, input: "" };
@@ -757,26 +812,79 @@ function reviewMasteredFromSession() {
   reviewSession.completed[word + "|w2m"] = true;
   reviewSession.completed[word + "|m2w"] = true;
   if (!reviewSession.wordResults[word]) reviewSession.wordResults[word] = {};
-  reviewSession.wordResults[word].mastered = true;
-  // wordsDone 置位：彻底阻断 tryCompleteWord 的结算路径（毕业词不再产生 FSRS 排期）
+  reviewSession.wordResults[word].slain = true;
+  // wordsDone 置位：彻底阻断 tryCompleteWord 的结算路径（斩掉的词不产生 FSRS 排期）
   reviewSession.wordsDone[word] = true;
-  // 「娴熟」= 彻底毕业：把该词全部任务（3 态 + 已入队的队尾重复任务，无论是否已完成）
-  // 从任务池中永久移除 → 进度分母 = 队列剩余任务数（总进度 -3），进度分子 answeredCount 不变。
-  // 注意：不能先标记 completed 再按「未完成任务」过滤 —— 三态 completed 已全部置真，
-  // 该过滤条件恒为假会导致任务池纹丝不动；此处一律按单词整体移除。
+  // 把该词全部任务（3 态 + 已入队的队尾重复任务，无论是否已完成）从任务池中永久移除
   reviewSession.queue = reviewSession.queue.filter((t) => !(t && t.word === word));
   saveReviewSession();
 
-  // 从回忆页/详情页/选择题页前进：毕业词不经 tryCompleteWord 结算，直接推进。
-  // 当前任务已被移除，下一个任务左移到位，因此不再手动 idx+1
-  //（renderReviewByPhase 会跳过已完成任务并定位到下一个有效任务）。
+  // 前进到下一个任务（当前任务已被移除，renderReviewByPhase 定位到下一个有效任务）。
+  // 斩是移除而非作答：不播放任何提示音（无答对音、无前进音）
   reviewSession.detailCtx = null;
   reviewSession.mcqData = null;
   reviewSession.lastResult = null;
   reviewSession.snapshot = null;
   saveReviewSession();
-  playNextSound();
   renderReviewByPhase();
+}
+
+/* ============================================================
+   Review 回退（撤销上一步操作，回到上一张卡片）
+   ------------------------------------------------------------
+   纯内存态历史栈（不落盘、不持久化，重启后自然清空）：
+   每次用户操作改变会话/复习状态前，先压入一份完整快照
+   （reviewSession 深拷贝 + 会话涉及词的 reviewStore 词条深拷贝）。
+   回退 = 弹出最近一份快照，整体还原会话与相关词条 →
+   已发生的 FSRS 结算（answerReview 对 vc-review 的改动）随词条快照一并还原，
+   复习日志（vc-review-revlogs）按「词+业务日」幂等合并，重答覆盖同日记录，
+   因此回退后重做不会重复计入复习次数、不会产生重复 FSRS 记录。
+   ============================================================ */
+
+const RV_HISTORY_MAX = 30;
+let rvHistory = [];
+
+/** 快照涉及的词条：当前任务池 + 拼写队列的全部单词（这些词才可能被结算改动） */
+function rvHistoryWordSet(session) {
+  const set = new Set();
+  (session.queue || []).forEach((t) => { if (t && t.word) set.add(t.word); });
+  (session.spellQueue || []).forEach((w) => { if (w) set.add(w); });
+  return set;
+}
+
+/** 压入快照（在每个会改变会话/复习状态的用户操作最前端调用） */
+function pushRvHistory() {
+  if (!reviewSession) return;
+  const words = {};
+  for (const w of rvHistoryWordSet(reviewSession)) {
+    if (reviewStore.words[w]) words[w] = JSON.parse(JSON.stringify(reviewStore.words[w]));
+  }
+  rvHistory.push({
+    session: JSON.parse(JSON.stringify(reviewSession)),
+    words: words,
+  });
+  if (rvHistory.length > RV_HISTORY_MAX) rvHistory.shift();
+}
+
+/** 回退：还原最近一份快照（会话 + 相关词条），并按快照内的阶段重新渲染 */
+function reviewBack() {
+  if (!rvHistory.length || !reviewSession || reviewSession.phase === "done") return;
+  const snap = rvHistory.pop();
+  const words = snap.words || {};
+  for (const w of Object.keys(words)) {
+    reviewStore.words[w] = JSON.parse(JSON.stringify(words[w]));
+  }
+  saveReview();
+  reviewSession = JSON.parse(JSON.stringify(snap.session));
+  saveReviewSession();
+  renderReviewByPhase();
+}
+
+/** 同步左上角「回退」按钮可用态：无历史或在完成态时置灰 */
+function updateRvUndoBtn() {
+  const btn = $("#review-undo");
+  if (!btn) return;
+  btn.disabled = !rvHistory.length || !reviewSession || reviewSession.phase === "done";
 }
 
 /* ============================================================
@@ -931,13 +1039,12 @@ function roundRatingsOf(word) {
 let reviewRevlogs = [];
 
 function loadReviewRevlogs() {
-  try {
-    const s = JSON.parse(localStorage.getItem(REVIEW_REVLOG_KEY) || "[]");
-    if (Array.isArray(s)) reviewRevlogs = s;
-  } catch (_) { reviewRevlogs = []; }
+  const r = VH_STG.safeRead(REVIEW_REVLOG_KEY, null);
+  reviewRevlogs = (r.status === "ok" && Array.isArray(r.value)) ? r.value : [];
 }
 
 function saveReviewRevlogs() {
+  if (VH_STG.writeBlocked(REVIEW_REVLOG_KEY)) return;
   try { localStorage.setItem(REVIEW_REVLOG_KEY, JSON.stringify(reviewRevlogs)); } catch (_) {}
 }
 
@@ -968,7 +1075,7 @@ function upsertReviewLog(entry) {
 
 /* ---------- 自适应参数（FSRS + VocabHit 个性化优化层） ----------
    冷启动门槛：<100 条不启用；100-300 仅调 scale；300-400 加 dr；≥400 加弱态识别。
-   回退保护：候选参数损失不严格优于当前则拒绝采纳（参考 Anki compute_params 的 log_loss 回退）。
+   回退保护：候选参数损失不严格优于当前则拒绝采纳（参考 FSRS 官方参数拟合的 log_loss 回退）。
    只调整 VocabHit 层参数（scale/dr/弱态），FSRS 核心公式参数 w0-w18 保持全局默认。 */
 
 const ADAPTIVE_DEFAULTS = {
@@ -981,18 +1088,20 @@ const ADAPTIVE_DEFAULTS = {
 let adaptive = { ...ADAPTIVE_DEFAULTS };
 
 function loadAdaptive() {
-  try {
-    const s = JSON.parse(localStorage.getItem(FSRS_ADAPTIVE_KEY) || "null");
-    if (s && s.version === 1) {
-      adaptive = {
-        ...ADAPTIVE_DEFAULTS, ...s,
-        weakStates: { ...ADAPTIVE_DEFAULTS.weakStates, ...(s.weakStates || {}) },
-      };
-    }
-  } catch (_) { adaptive = { ...ADAPTIVE_DEFAULTS }; }
+  const r = VH_STG.safeRead(FSRS_ADAPTIVE_KEY, null);
+  const s = (r.status === "ok") ? r.value : null;
+  if (s && s.version === 1) {
+    adaptive = {
+      ...ADAPTIVE_DEFAULTS, ...s,
+      weakStates: { ...ADAPTIVE_DEFAULTS.weakStates, ...(s.weakStates || {}) },
+    };
+  } else if (r.status !== "unverified") {
+    adaptive = { ...ADAPTIVE_DEFAULTS };
+  }
 }
 
 function saveAdaptive() {
+  if (VH_STG.writeBlocked(FSRS_ADAPTIVE_KEY)) return;
   try { localStorage.setItem(FSRS_ADAPTIVE_KEY, JSON.stringify(adaptive)); } catch (_) {}
 }
 
@@ -1103,10 +1212,8 @@ const FSRS_ADAPTIVE_KEY = "vc-fsrs-adaptive";  // 自适应参数（scale/dr/弱
 let reviewDays = {};
 
 function loadReviewDays() {
-  try {
-    const s = JSON.parse(localStorage.getItem(REVIEW_DAYS_KEY) || "null");
-    if (s && typeof s === "object" && !Array.isArray(s)) reviewDays = s;
-  } catch (_) { /* 损坏数据忽略 */ }
+  const r = VH_STG.safeRead(REVIEW_DAYS_KEY, null);
+  if (r.status === "ok" && r.value && typeof r.value === "object" && !Array.isArray(r.value)) reviewDays = r.value;
 }
 
 // 新会话状态结构（task pool 任务池模式）
@@ -1154,10 +1261,13 @@ let reviewSession = {
 };
 
 function saveReviewSession() {
+  if (VH_STG.writeBlocked(REVIEW_SESSION_KEY)) return;
   try { localStorage.setItem(REVIEW_SESSION_KEY, JSON.stringify(reviewSession)); } catch (_) {}
 }
 
-function clearReviewSession() {  try { localStorage.removeItem(REVIEW_SESSION_KEY); } catch (_) {}
+function clearReviewSession() {
+  if (VH_STG.writeBlocked(REVIEW_SESSION_KEY)) return; // 未确认时不清除：保留磁盘上的可恢复会话
+  try { localStorage.removeItem(REVIEW_SESSION_KEY); } catch (_) {}
 }
 
 /* ---------- 今日复习记录：完成页列表的真实数据源 ----------
@@ -1187,6 +1297,7 @@ function buildTodayRecord() {
 /** 保存今日复习记录：与同日已有记录合并（词义取最终结果，选择题/拼写保错留红） */
 function saveReviewTodayRecord(rec) {
   try {
+    if (VH_STG.writeBlocked(REVIEW_TODAY_KEY) || VH_STG.writeBlocked(REVIEW_DAYS_KEY)) return;
     const prev = loadReviewTodayRecord();
     if (prev) {
       rec.meaning = { ...prev.meaning, ...rec.meaning };
@@ -1205,10 +1316,8 @@ function saveReviewTodayRecord(rec) {
 
 /** 读取今日复习记录：仅限当天（跨天自动失效）；无记录返回 null */
 function loadReviewTodayRecord() {
-  try {
-    const r = JSON.parse(localStorage.getItem(REVIEW_TODAY_KEY) || "null");
-    if (r && r.day === vocabDay() && r.meaning && r.mcq && r.spell) return r;
-  } catch (_) {}
+  const r = VH_STG.safeRead(REVIEW_TODAY_KEY, null);
+  if (r.status === "ok" && r.value && r.value.day === vocabDay() && r.value.meaning && r.value.mcq && r.value.spell) return r.value;
   return null;
 }
 
@@ -1672,6 +1781,7 @@ function openReview() {
   pushPageSnapshot(); // Review 属 home 子页：快照离开前的页面状态，返回时恢复
   renderAll();
   if (window.VH_STATS) VH_STATS.touch(); // 学习统计：会话开始，重置有效时长计时
+  rvHistory = []; // 回退历史为纯内存态：新会话/恢复会话都从零开始（重启后不可回退，安全）
   const saved = loadReviewSession();
   
   if (saved) {
@@ -1747,6 +1857,7 @@ function openReview() {
 /** 按阶段渲染（统一经 rvRender 做轻量切换动画） */
 function renderReviewByPhase() {
   const body = $("#review-body");
+  updateRvUndoBtn(); // 左上角「回退」按钮可用态随每次渲染同步
   
   if (reviewSession.phase === "meaning") {
     // 跳过已完成的任务（可能被标记为 completed 但仍在队列中）
@@ -1876,6 +1987,7 @@ function rvSenseRows(word) {
     —— 新屏全程在场，绝无白屏/闪烁；约 280ms，轻微克制（无 3D 卷曲） */
 let rvAnimating = false;
 function rvRender(fn) {
+  updateRvUndoBtn(); // 每次屏幕渲染同步「回退」按钮可用态（各渲染路径的公共入口）
   const body = $("#review-body");
   if (!body || rvAnimating) { fn(); return; }
   const reduced = typeof window.matchMedia === "function"
@@ -1908,11 +2020,13 @@ function rvMeaningProgress() {
   rvSetProgress(Math.min(reviewSession.answeredCount, total), total);
 }
 
-/** 「娴熟」毕业按钮（右上角灰色小字）。
-    点击后该词彻底毕业：立即移出 Review 队列、后续 FSRS 不再排期；
-    生词本记录与全部学习历史保留，不删除单词本身。 */
-function rvMasteredBtnHtml() {
-  return `<button class="rv-mastered" data-mastered="1" type="button" aria-label="标记娴熟，退出复习队列">娴熟</button>`;
+/** Review 卡右上角操作区：「斩」——彻底移出复习队列（持久化已斩状态）。
+    点击后该词立即退出本次复习与后续 FSRS 调度；生词本记录与全部学习历史保留。
+    （v1.3.3 起「娴熟」入口退役：与「斩」语义重复；历史 mastered 数据仍由调度层兼容豁免。） */
+function rvTopActionsHtml() {
+  return `<div class="rv-top-actions">
+    <button class="rv-slash" data-slash="1" type="button" aria-label="斩：不再复习此词">斩</button>
+  </div>`;
 }
 
 /** Phase 1: 词义复习 - 回忆页（单词舞台中央，顶部进度，底部判断区） */
@@ -1922,7 +2036,7 @@ function renderMeaning(body) {
   rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-meaning rv-screen">
-    ${rvMasteredBtnHtml()}
+    ${rvTopActionsHtml()}
     <div class="rv-stage">
       <div class="rv-word-row">
         <h2 class="rv-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
@@ -1984,7 +2098,7 @@ function renderDetail(body) {
   rvMeaningProgress();
   
   body.innerHTML = `<div class="rv-detail rv-screen">
-    ${rvMasteredBtnHtml()}
+    ${rvTopActionsHtml()}
     <div class="rv-detail-head">
       <div class="rv-detail-indicator ${indicatorClass}"></div>
       <div class="rv-detail-word-row">
@@ -2099,7 +2213,7 @@ function renderMcqWord2Meaning(body) {
   rvMeaningProgress();
 
   body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
-    ${rvMasteredBtnHtml()}
+    ${rvTopActionsHtml()}
     <div class="rv-stage">
       <div class="rv-word-row">
         <h2 class="rv-word ${rvWordSizeClass(word)}">${esc(word)}</h2>
@@ -2138,7 +2252,7 @@ function renderMcqMean2Word(body) {
   const questionHtml = questionParts.length ? KY.kyJoin(questionParts) : esc(data.question);
 
   body.innerHTML = `<div class="rv-meaning rv-mcq rv-screen">
-    ${rvMasteredBtnHtml()}
+    ${rvTopActionsHtml()}
     <div class="rv-stage">
       <p class="rv-mcq-question">${questionHtml}</p>
       <p class="rv-mcq-hint">选择正确的英文单词</p>
@@ -2154,6 +2268,7 @@ function onMcqAnswer(clickedIdx) {
   const data = reviewSession.mcqData;
   const task = reviewSession.currentTask;
   if (!data || !task) return;
+  pushRvHistory(); // 回退锚点：本次选择题作答前
   const correct = clickedIdx === data.correctIdx;
   const word = task.word;
   const step = task.step; // "w2m" or "m2w"
@@ -2268,7 +2383,7 @@ function renderSpell(body) {
        <button class="rv-btn-next" id="spell-submit" type="button">${sp.submitted && !sp.correct ? "下一个" : "确认"}</button>`;
   
   body.innerHTML = `<div class="rv-spell rv-screen">
-    ${rvMasteredBtnHtml()}
+    ${rvTopActionsHtml()}
     <div class="rv-stage">
       <p class="rv-spell-label">拼写复习</p>
       <button class="rv-speaker rv-speaker-sm" data-speak="${esc(word)}" aria-label="播放读音" type="button">${SPEAKER_SVG}</button>
@@ -2428,6 +2543,7 @@ function enqueueRecallRepeat(word) {
     answerReview 延迟到单词三种任务全部完成时调用。 */
 function onReviewAnswer(result) {
   ttsStop();
+  pushRvHistory(); // 回退锚点：本次判断前的会话与复习状态
   if (window.VH_STATS) VH_STATS.add({ vocab: 1, sec: VH_STATS.elapsed() });
   const word = reviewSession.current;
   const task = reviewSession.currentTask;
@@ -2478,6 +2594,7 @@ function onReviewAnswer(result) {
 function reviewCorrection() {
   const word = reviewSession.current;
   if (!reviewSession.snapshot && !reviewSession.answeredToday[word]) return;
+  pushRvHistory(); // 回退锚点：本次修正前
 
   if (reviewSession.snapshot) {
     reviewStore.words[word] = reviewSession.snapshot;
@@ -2543,6 +2660,7 @@ function tryCompleteWord(word) {
 /** 任务池模式下的“下一个”：根据 detailCtx 决定行为 */
 function reviewNext() {
   ttsStop();
+  pushRvHistory(); // 回退锚点：本次前进（完成任务/重入队）前
 
   const ctx = reviewSession.detailCtx;
 
@@ -2603,6 +2721,7 @@ function reviewNext() {
     Phase 1 队末重排会在 queue 中留下重复项，拼写每词只考一次起步） */
 function goToSpellPhase() {
   // 从任务池提取唯一单词列表（已「娴熟」毕业的词不进入拼写阶段）
+  pushRvHistory(); // 回退锚点：进入拼写阶段前（可退回词义阶段末尾）
   const uniqueWords = [...new Set(reviewSession.queue.map(t => t.word))]
     .filter((w) => !isReviewMastered(w));
   reviewSession.spellQueue = shuffleArray(uniqueWords);
@@ -2630,6 +2749,7 @@ function settleSpell(word) {
     错误 → 停留当前单词展示正确拼写，按钮变「下一个」：计入进度、该词入队尾重复（与词义/选择题答错同一套重复逻辑） */
 function submitSpell() {
   const word = reviewSession.current;
+  pushRvHistory(); // 回退锚点：本次拼写提交前
   // 错误展示态（已显示正确拼写）：按钮此时为「下一个」→ 该词入拼写队列队尾重复，前进。
   // 若用户已把输入改对（错误 → 正确完成），先播一次正确提示音再前进（仅触发一次，不重复播放）
   if (reviewSession.spell.submitted && !reviewSession.spell.correct) {
@@ -2676,6 +2796,7 @@ function submitSpell() {
     该词加入拼写队列队尾重复（总进度 +1），前进到下一个拼写词 */
 function spellNext() {
   const word = reviewSession.current;
+  pushRvHistory(); // 回退锚点：本次「下一个」前
   reviewSession.spellIdx += 1;
   reviewSession.spellQueue.push(word);
   reviewSession.spell = { submitted: false, correct: false, input: "" };
@@ -2688,6 +2809,7 @@ function spellNext() {
     且被跳过的词反复出现 —— 表现为进度条越走越多、连续跳过时永远结束不了 */
 function skipSpell() {
   ttsStop(); // 切换单词：立即停掉可能仍在播放的读音
+  pushRvHistory(); // 回退锚点：本次跳过前
   reviewSession.spellStats.skipped += 1;
   // 今日复习记录：跳过 = 未通过（若此前已记 wrong，保留 wrong，同为需强化）
   if (!reviewSession.spellResults[reviewSession.current]) {
@@ -2729,12 +2851,11 @@ let pomo = {
 };
 
 function loadPomo() {
-  try {
-    pomoRecords = JSON.parse(localStorage.getItem(POMO_KEY) || "[]");
-    if (!Array.isArray(pomoRecords)) pomoRecords = [];
-  } catch (_) { pomoRecords = []; }
+  const r = VH_STG.safeRead(POMO_KEY, null);
+  pomoRecords = (r.status === "ok" && Array.isArray(r.value)) ? r.value : [];
 }
 function savePomo() {
+  if (VH_STG.writeBlocked(POMO_KEY)) return;
   try { localStorage.setItem(POMO_KEY, JSON.stringify(pomoRecords)); } catch (_) {}
 }
 
@@ -3060,15 +3181,18 @@ function statsBarChartSVG(days) {
   </svg>`;
 }
 
-/** 折线图（近 7 天学习时间：实线=累计时长 虚线=每日时长）
-    累计与每日同单位（分钟）→ 共用同一纵轴刻度：等值必然同高、累计≥每日必然不低于每日，
-    线条位置与左侧参考刻度严格一致（修正旧版双刻度各自归一的视觉失真：
-    曾出现累计 2.8 > 今日 1.4 两线却交汇同一点、同为 1.4 却一高一低）
+/** 折线图（近 7 天学习时间，单系列）
+    series="cum" 累计时长（实线，取值 d.cumMin） / "daily" 每日时长（虚线，取值 d.dailyMin）。
+    原双线同图已拆分为两张独立折线图（累计图在上、每日图在下）：
+    数据计算方式、近 7 天数据范围与各自的线条/配色样式逻辑均不变，仅分别呈现。
+    纵轴按本图系列自行归一（单系列单刻度，线条位置与左侧参考刻度严格一致）。
     sel：选中日索引（null = 默认今日）；点击某天数据列切换显示该日数据，点击图表外恢复今日 */
-function statsLineChartSVG(days, sel) {
+function statsLineChartSVG(days, sel, series) {
+  const isCum = series === "cum";
   const W = 340, H = 148, padL = 30, padR = 30, padT = 18, padB = 20;
   const iw = W - padL - padR, ih = H - padT - padB;
-  const maxV = Math.max(1, ...days.map((d) => d.cumMin), ...days.map((d) => d.dailyMin));
+  const vals = days.map((d) => (isCum ? d.cumMin : d.dailyMin));
+  const maxV = Math.max(1, ...vals);
   const x = (i) => padL + (iw * i) / (days.length - 1);
   const yOf = (v) => H - padB - (v / maxV) * ih;
   const active = sel != null && sel >= 0 && sel < days.length; // 是否用户点选过
@@ -3081,13 +3205,11 @@ function statsLineChartSVG(days, sel) {
     // 单一纵轴：仅左侧一组参考刻度（右侧不再独立成另一套刻度，避免数值误导）
     texts += `<text class="chart-axis-label" x="${padL - 4}" y="${Number(y) + 3}" text-anchor="end">${fmtStatMin(maxV * f)}</text>`;
   });
-  const ptsC = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.cumMin).toFixed(1)}`).join(" ");
-  const ptsD = days.map((d, i) => `${x(i).toFixed(1)},${yOf(d.dailyMin).toFixed(1)}`).join(" ");
+  const pts = vals.map((v, i) => `${x(i).toFixed(1)},${yOf(v).toFixed(1)}`).join(" ");
   days.forEach((d, i) => {
     const cls = i === si && active ? " sel" : "";
     const r = i === si && active ? 3.2 : 2.4;
-    dots += `<circle class="chart-dot dot-cum${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.cumMin).toFixed(1)}" r="${r}"/>`;
-    dots += `<circle class="chart-dot dot-daily${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(d.dailyMin).toFixed(1)}" r="${r}"/>`;
+    dots += `<circle class="chart-dot dot-${series}${cls}" cx="${x(i).toFixed(1)}" cy="${yOf(vals[i]).toFixed(1)}" r="${r}"/>`;
     texts += `<text class="chart-x${d.isToday ? " today" : ""}${cls}" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${d.label}</text>`;
     // 整列透明命中区（置顶）：点中某天数据点/所在列即选中该天，触屏更易命中
     const hx0 = i === 0 ? 0 : x(i) - colW / 2;
@@ -3095,28 +3217,34 @@ function statsLineChartSVG(days, sel) {
     hits += `<rect class="chart-hit" data-li="${i}" x="${hx0.toFixed(1)}" y="0" width="${(hx1 - hx0).toFixed(1)}" height="${H}" fill="transparent"/>`;
   });
   const sd = days[si];
-  // 数值标注与选中日数据点一一对应（默认今日）：累计 = 实线当日的值，日期标注 = 虚线当日学习时长
-  texts += `<text class="chart-val strong" x="${W - padR}" y="${(yOf(sd.cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(sd.cumMin)}</text>`;
-  texts += `<text class="chart-val daily" x="${W - padR}" y="${(yOf(sd.dailyMin) + 12).toFixed(1)}" text-anchor="end">${sd.isToday ? "今日" : sd.label} ${fmtStatMin(sd.dailyMin)}</text>`;
-  return `<svg id="stats-line-chart" class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间折线图">
+  // 数值标注与选中日数据点一一对应（默认今日）：累计图 = 累计当日的值，每日图 = 当日学习时长
+  if (isCum) {
+    texts += `<text class="chart-val strong" x="${W - padR}" y="${(yOf(sd.cumMin) - 7).toFixed(1)}" text-anchor="end">累计 ${fmtStatMin(sd.cumMin)}</text>`;
+  } else {
+    texts += `<text class="chart-val daily" x="${W - padR}" y="${(yOf(sd.dailyMin) + 12).toFixed(1)}" text-anchor="end">${sd.isToday ? "今日" : sd.label} ${fmtStatMin(sd.dailyMin)}</text>`;
+  }
+  return `<svg id="stats-line-chart-${series}" class="chart-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 7 天学习时间${isCum ? "累计" : "每日"}折线图">
     ${grid}
     ${active ? `<line class="chart-sel-line" x1="${x(si).toFixed(1)}" x2="${x(si).toFixed(1)}" y1="${padT}" y2="${H - padB}"/>` : ""}
-    <polyline class="line-cum" points="${ptsC}"/>
-    <polyline class="line-daily" points="${ptsD}"/>
+    <polyline class="line-${series}" points="${pts}"/>
     ${dots}
     ${texts}
     ${hits}
   </svg>`;
 }
 
-/** 折线图选中日切换后仅重绘该 SVG（不重渲染整块看板，无滚动跳动） */
+/** 折线图选中日切换后仅重绘两张 SVG（不重渲染整块看板，无滚动跳动） */
 function statsLineRender() {
-  const old = $("#stats-line-chart");
-  if (!old || !window.VH_STATS) return;
-  const tpl = document.createElement("div");
-  tpl.innerHTML = statsLineChartSVG(VH_STATS.last7(), statsLineSel);
-  const fresh = tpl.firstElementChild;
-  if (fresh) old.replaceWith(fresh);
+  if (!window.VH_STATS) return;
+  const days = VH_STATS.last7();
+  ["cum", "daily"].forEach((series) => {
+    const old = $(`#stats-line-chart-${series}`);
+    if (!old) return;
+    const tpl = document.createElement("div");
+    tpl.innerHTML = statsLineChartSVG(days, statsLineSel, series);
+    const fresh = tpl.firstElementChild;
+    if (fresh) old.replaceWith(fresh);
+  });
 }
 
 /** 坚持看板渲染（连续天数 / 最长 / 已完成 / 可切换月份日历 / 目标日期标记 / 点击日期查看 / 学习统计） */
@@ -3202,10 +3330,17 @@ function renderHabits() {
     </section>
     <section class="task-section">
       <div class="task-section-head">
-        <p class="section-eyebrow">学习时间 · 近 7 天</p>
-        <div class="chart-legend"><span class="lg"><span class="ln ln-cum"></span>累计</span><span class="lg"><span class="ln ln-daily"></span>今日</span></div>
+        <p class="section-eyebrow">学习时间（累计）· 近 7 天</p>
+        <div class="chart-legend"><span class="lg"><span class="ln ln-cum"></span>累计</span></div>
       </div>
-      ${lineHasData ? statsLineChartSVG(d7, statsLineSel) : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
+      ${lineHasData ? statsLineChartSVG(d7, statsLineSel, "cum") : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
+    </section>
+    <section class="task-section">
+      <div class="task-section-head">
+        <p class="section-eyebrow">学习时间（每日）· 近 7 天</p>
+        <div class="chart-legend"><span class="lg"><span class="ln ln-daily"></span>今日</span></div>
+      </div>
+      ${lineHasData ? statsLineChartSVG(d7, statsLineSel, "daily") : `<div class="chart-empty">近 7 天暂无学习时长</div>`}
     </section>`;
   }
 
@@ -3494,22 +3629,24 @@ let taskFormTab = "task"; // 创建面板当前表单：task | goal | reward
 let prevRingOffset = null;
 
 function loadTasks() {
-  try {
-    const s = JSON.parse(localStorage.getItem(TASKS_KEY) || "null");
-    if (s && Array.isArray(s.daily)) {
-      taskStore = s;
-      // 旧版本/导入备份可能缺字段：补默认值，否则 reminderSnapshot() 抛错会被
-      // pushReminderState 静默吞掉 → 快照永远无效 → 到点不发任何通知
-      if (!Array.isArray(taskStore.onetime)) taskStore.onetime = [];
-      if (!Array.isArray(taskStore.goals)) taskStore.goals = [];
-      if (!Array.isArray(taskStore.rewards)) taskStore.rewards = [];
-      if (!taskStore.checkins || typeof taskStore.checkins !== "object") taskStore.checkins = {};
-    } else {
-      taskStore = { daily: [], onetime: [], goals: [], rewards: [], checkins: {} };
-    }
-  } catch (_) { taskStore = { daily: [], onetime: [], goals: [], rewards: [], checkins: {} }; }
+  /* 数据安全加固：unverified（原生快照凭据 HINT.TASKS 佐证任务曾存在）时保持内存现状，
+     防止默认空任务覆盖磁盘；写入由 saveTasks 的写保护拦截 */
+  const r = VH_STG.safeRead(TASKS_KEY, VH_STG.HINT.TASKS);
+  const s = (r.status === "ok") ? r.value : null;
+  if (s && Array.isArray(s.daily)) {
+    taskStore = s;
+    // 旧版本/导入备份可能缺字段：补默认值，否则 reminderSnapshot() 抛错会被
+    // pushReminderState 静默吞掉 → 快照永远无效 → 到点不发任何通知
+    if (!Array.isArray(taskStore.onetime)) taskStore.onetime = [];
+    if (!Array.isArray(taskStore.goals)) taskStore.goals = [];
+    if (!Array.isArray(taskStore.rewards)) taskStore.rewards = [];
+    if (!taskStore.checkins || typeof taskStore.checkins !== "object") taskStore.checkins = {};
+  } else if (r.status !== "unverified") {
+    taskStore = { daily: [], onetime: [], goals: [], rewards: [], checkins: {} };
+  }
 }
 function saveTasks() {
+  if (VH_STG.writeBlocked(TASKS_KEY)) return;
   try { localStorage.setItem(TASKS_KEY, JSON.stringify(taskStore)); } catch (_) {}
   pushReminderState(); // 通知提醒：任务/打卡变化 → 同步快照给原生（到点判断是否已完成）
 }
@@ -4134,15 +4271,22 @@ $("#notify-entry").addEventListener("click", () => { renderNotify(); openPage("n
 let reviewActionAt = 0;
 $("#review-entry").addEventListener("click", openReview);
 $("#review-clear").addEventListener("click", confirmClearReview);
+/* 「回退」：撤销上一步操作，回到上一张卡片（页头按钮，委托绑定） */
+$("#review-undo").addEventListener("click", () => {
+  const now = Date.now();
+  if (now - reviewActionAt < 300) return;
+  reviewActionAt = now;
+  reviewBack();
+});
 $("#review-body").addEventListener("click", (e) => {
   const now = Date.now();
   const ready = now - reviewActionAt >= 300;
   const fire = (ok, fn) => { if (ok) { reviewActionAt = now; fn(); } };
   
-  // 「娴熟」毕业：词义回忆页 / 详情页 / 选择题页 / 拼写页右上角灰色小字按钮
-  // 优先于其它分支处理（毕业词立即退出调度，不再结算、不再出现）
-  if (e.target.closest(".rv-mastered[data-mastered]")) {
-    fire(ready, reviewMasteredFromSession);
+  // 「斩」：右上角斩字按钮 → 该词持久化标记已斩，立即移出本次复习与后续调度
+  // （v1.3.3 起「娴熟」入口退役，斩是复习中唯一的移出操作）
+  if (e.target.closest(".rv-slash[data-slash]")) {
+    fire(ready, reviewSlashFromSession);
     return;
   }
   
@@ -4680,10 +4824,9 @@ let wordNotesCache = null;   // 惰性加载的内存缓存 { [word]: { text, ts
 
 function loadWordNotes() {
   if (wordNotesCache) return wordNotesCache;
-  try {
-    const parsed = JSON.parse(localStorage.getItem(WORD_NOTES_KEY) || "null");
-    wordNotesCache = (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
-  } catch (_) { wordNotesCache = {}; }
+  const r = VH_STG.safeRead(WORD_NOTES_KEY, null);
+  if (r.status === "unverified") return {}; // 未确认：不缓存，下次调用自动重试
+  wordNotesCache = (r.value && typeof r.value === "object" && !Array.isArray(r.value)) ? r.value : {};
   return wordNotesCache;
 }
 
@@ -4696,6 +4839,7 @@ function getWordNote(w) {
 function saveWordNote(w, text) {
   const key = String(w || "").trim().toLowerCase();
   if (!key) return false;
+  if (VH_STG.writeBlocked(WORD_NOTES_KEY)) return false; // 读取未确认：拒绝以空缓存覆盖全部笔记
   const t = String(text || "").replace(/^\s+|\s+$/g, "");
   const notes = loadWordNotes();
   if (!t) delete notes[key]; else notes[key] = { text: t, ts: Date.now() };
@@ -4992,8 +5136,12 @@ sheetInput.addEventListener("input", (e) => {
 });
 
 sheetInput.addEventListener("keydown", async (e) => {
-  if (e.key !== "Enter") return;
+  // 仅拦截输入法选词过程中的按键；回车动作键本身可能带 keyCode 229，不能一刀切拦截
+  if (e.isComposing) return;
+  const isEnter = e.key === "Enter" || e.keyCode === 13 || e.which === 13;
+  if (!isEnter) return;
   e.preventDefault();
+  e.stopPropagation();
   const q = sheetInput.value.trim().toLowerCase();
   // 中文输入 → 反查：回车直接查询匹配度最高的英文词
   if (isChineseQuery(q)) {
@@ -5165,21 +5313,34 @@ const notifyCfg = loadNotify();
 let notifyPushTimer = null;
 
 function loadNotify() {
-  try {
-    const s = JSON.parse(localStorage.getItem(NOTIFY_KEY) || "null");
-    if (s && typeof s === "object") {
-      const h = Number(s.hour), m = Number(s.minute);
-      return {
-        on: !!s.on,
-        hour: Number.isFinite(h) ? Math.min(23, Math.max(0, Math.round(h))) : 21,
-        minute: Number.isFinite(m) ? Math.min(59, Math.max(0, Math.round(m))) : 0,
-      };
-    }
-  } catch (_) { /* 数据损坏 → 回默认 */ }
+  const r = VH_STG.safeRead(NOTIFY_KEY, null);
+  const s = (r.status === "ok") ? r.value : null;
+  if (s && typeof s === "object") {
+    const h = Number(s.hour), m = Number(s.minute);
+    return {
+      on: !!s.on,
+      hour: Number.isFinite(h) ? Math.min(23, Math.max(0, Math.round(h))) : 21,
+      minute: Number.isFinite(m) ? Math.min(59, Math.max(0, Math.round(m))) : 0,
+    };
+  }
   return { on: false, hour: 21, minute: 0 };
 }
 
+/* 数据安全加固：notifyCfg 为 const（解析期初始化），恢复时把重读结果拷回原对象 */
+function reloadNotifyCfg() {
+  if (!VH_STG.isFailed(NOTIFY_KEY)) return;
+  const r = VH_STG.safeRead(NOTIFY_KEY, null);
+  if (r.status === "ok" && r.value && typeof r.value === "object") {
+    const h = Number(r.value.hour), m = Number(r.value.minute);
+    notifyCfg.on = !!r.value.on;
+    notifyCfg.hour = Number.isFinite(h) ? Math.min(23, Math.max(0, Math.round(h))) : 21;
+    notifyCfg.minute = Number.isFinite(m) ? Math.min(59, Math.max(0, Math.round(m))) : 0;
+    applyNotifyUI();
+  }
+}
+
 function saveNotify() {
+  if (VH_STG.writeBlocked(NOTIFY_KEY)) return;
   try { localStorage.setItem(NOTIFY_KEY, JSON.stringify(notifyCfg)); } catch (_) {}
 }
 
@@ -5220,6 +5381,9 @@ function reminderSnapshot() {
 /** 推送快照给原生；300ms 合并窗口（复习答题、批量迁移等高频写入只推最后一次） */
 function pushReminderState() {
   if (!hasBridge()) return;
+  /* 数据安全加固：核心数据存在未确认读取时不推送 —— 空内存态快照会覆盖原生
+     SharedPreferences 里的最后有效快照（既破坏提醒判断，也销毁「老用户」判定凭据） */
+  if (VH_STG.anyFailed()) return;
   clearTimeout(notifyPushTimer);
   notifyPushTimer = setTimeout(() => {
     try { window.AndroidBridge.updateReminderState(reminderSnapshot()); } catch (_) {}
@@ -5291,6 +5455,9 @@ function initNotify() {
   const item = $("#notify-entry"), sep = $("#notify-sep");
   if (item) item.hidden = false;
   if (sep) sep.hidden = false;
+  /* 数据安全加固：设置读取未确认时，不把内存默认值（关/21:00）回写、也不下发原生，
+     防止覆盖 localStorage 与原生 SharedPreferences 里的真实设置 */
+  if (VH_STG.isFailed(NOTIFY_KEY)) { applyNotifyUI(); return; }
   // 系统通知被关（用户在系统设置里关掉）：前端开关复位，杜绝「显示已开但不会响」的幽灵状态
   try {
     if (notifyCfg.on && !window.AndroidBridge.hasNotificationPermission()) {
@@ -5824,25 +5991,88 @@ exportSheetOverlay.addEventListener("click", closeExportSheet);
 /* ---------- 初始化 ---------- */
 
 renderGreeting();
-loadRecords();
-loadReview();
-loadReviewDays(); // 连续 Review 天数记录（vc-review-days）
-loadReviewRevlogs(); // 复习日志（四态统一 FSRS 自适应层训练数据源）
-loadAdaptive(); // 个性化自适应参数
-syncReviewWithWords(); // 生词本 = Review 唯一数据源：清除不在生词本的残留脏数据
-migrateReview(); // 为生词本内无复习状态的词补建（按「首次加入日期」安排首次复习）
-migrateLegacyIntervalsToFsrs(); // 旧算法遗留间隔 → FSRS 重算（旧用户升级后 nextAt 统一为 FSRS 结果）
-loadPomo();
-loadTasks(); // 待办任务 / 目标 / 奖励 / 打卡
-renderAll();
 
-applyTheme(localStorage.getItem("vc-theme") || "system", false);
-initOverlay();
-initNotify();
+/* 数据安全加固：核心数据装载链（启动 / 回前台恢复 / 读取失败重试共用）。
+   各 load 内部均已区分「读取确认成功」与「读取未确认（unverified）」：
+   unverified 时保持内存现状直接返回，对应写入被写保护拦截，绝不落盘覆盖。 */
+/* 数据安全加固：原生持久心跳 —— 把「本机确有用户数据」及其规模记录到原生 SharedPreferences
+   （vh_data_guard，不受 WebView 存储层故障影响）。此后任何启动若核心键读不到，
+   VH_STG 即可凭此区分「老用户读取丢失」与「真新用户」，绝不以默认空数据初始化/覆盖。
+   仅在核心数据确认读取/写入成功的会话调用（规模可信）；幂等，桥不可用时静默。 */
+function vhMarkUsed() {
+  if (!window.AndroidBridge || typeof window.AndroidBridge.markDataUsed !== "function") return;
+  try {
+    window.AndroidBridge.markDataUsed(JSON.stringify({
+      w: Object.keys(records.words || {}).length,
+      r: Object.keys(reviewStore.words || {}).length,
+    }));
+  } catch (e) { /* 静默 */ }
+}
 
-/* 启动闪屏：首页初始化完成 → 通知闪屏可按自然结束点关闭（见 js/splash.js，
-   首页先就绪时闪屏播完即走、不人为延迟；闪屏未加载时此调用自动跳过） */
-if (window.__vhSplash) window.__vhSplash.appReady();
+function loadCoreData() {
+  loadRecords();
+  loadReview();
+  loadReviewDays(); // 连续 Review 天数记录（vc-review-days）
+  loadReviewRevlogs(); // 复习日志（四态统一 FSRS 自适应层训练数据源）
+  loadAdaptive(); // 个性化自适应参数
+  syncReviewWithWords(); // 生词本 = Review 唯一数据源：清除不在生词本的残留脏数据
+  migrateReview(); // 为生词本内无复习状态的词补建（按「首次加入日期」安排首次复习）
+  migrateLegacyIntervalsToFsrs(); // 旧算法遗留间隔 → FSRS 重算（旧用户升级后 nextAt 统一为 FSRS 结果）
+  loadPomo();
+  loadTasks(); // 待办任务 / 目标 / 奖励 / 打卡
+  reloadNotifyCfg(); // 设置读取未确认时的恢复重读（读取成功后拷回 notifyCfg）
+  if (!VH_STG.anyFailed()) vhMarkUsed(); // 全部确认成功 → 更新原生心跳（覆盖 bootApp/回前台/重试恢复三个路径）
+}
+
+function bootApp() {
+  loadCoreData();
+  renderAll();
+
+  applyTheme(localStorage.getItem("vc-theme") || "system", false);
+  initOverlay();
+  initNotify();
+
+  /* 启动闪屏：首页初始化完成 → 通知闪屏可按自然结束点关闭（见 js/splash.js，
+     首页先就绪时闪屏播完即走、不人为延迟；闪屏未加载时此调用自动跳过） */
+  if (window.__vhSplash) window.__vhSplash.appReady();
+}
+
+/* 数据安全加固：后台自动恢复 —— 启动时存在未确认读取（WebView 存储层偶发故障）时，
+   每 2s 重读一次（约 30s 上限）；全部确认成功后静默重渲染首页。 */
+function vhStartRecovery() {
+  let tries = 0;
+  (function tick() {
+    if (!VH_STG.anyFailed()) return;
+    if (tries++ >= 15) return; // 未恢复则停止重试，等下次启动/回前台再试
+    setTimeout(() => {
+      loadCoreData();
+      if (window.VH_Knowledge) { try { VH_Knowledge.reload(); } catch (_) {} }
+      if (window.VH_SR && VH_SR.data) { try { VH_SR.data.loadAll(); } catch (_) {} }
+      /* 重检剩余失败键：loadCoreData 只覆盖启动装载的键，未覆盖的键（如 vc-review-today /
+         vc-review-session-v2）在存储恢复后由这里统一重新判定 —— 确认真没有即解除标记，
+         避免一个「合法缺失键」长期挂着全局写保护（所有模块保存被静默拦截）。 */
+      if (typeof VH_STG.recheckFailed === "function") VH_STG.recheckFailed();
+      if (!VH_STG.anyFailed()) renderAllQuiet();
+      else tick();
+    }, 2000);
+  })();
+}
+
+/* 数据安全加固：存储就绪门 —— 正常启动（探针一次通过）行为与原版完全一致，
+   同步完成初始化；探针失败则最多重试约 2s 再进入保护模式（未确认键写入全部拦截，
+   等待后台恢复 / 重启），宁可暂缓初始化也不用默认数据覆盖用户数据。 */
+let vhBootRetries = 0;
+(function vhTryBoot() {
+  if (VH_STG.probe()) {
+    bootApp();
+    if (VH_STG.anyFailed()) vhStartRecovery();
+    return;
+  }
+  if (vhBootRetries++ < 20) { setTimeout(vhTryBoot, 100); return; }
+  bootApp(); // 保护模式启动：界面可浏览，数据写入被拦截直至存储恢复
+  showToast("本地数据读取异常，已开启数据保护，请稍后重试或重启应用");
+  vhStartRecovery();
+})();
 
 /* 回到前台：检查跨天重置 + 重载记录（与后台悬浮查词互通）+ 悬浮查词授权结果 */
 document.addEventListener("visibilitychange", () => {
@@ -5853,12 +6083,21 @@ document.addEventListener("visibilitychange", () => {
      页面停留在用户离开时的状态，不闪不跳。 */
   const resumeSig = () => JSON.stringify([records, reviewStore]);
   const sigBefore = resumeSig();
-  loadRecords(); // 后台悬浮查词可能已写入新记录
-  rolloverIfNeeded();
-  // 悬浮查词期间生词本已变化（新增/删除）：与启动时同样的同步流程，
-  // 否则悬浮条确认的生词要等下次重启才会进入 Review 队列
-  syncReviewWithWords();
-  migrateReview();
+  if (VH_STG.anyFailed()) {
+    /* 数据安全加固：存在未确认读取 → 回前台立即做一次全量恢复重读
+       （读取成功即解除对应键的写保护，并恢复跨模块数据装载） */
+    loadCoreData();
+    if (window.VH_Knowledge) { try { VH_Knowledge.reload(); } catch (_) {} }
+    if (window.VH_SR && VH_SR.data) { try { VH_SR.data.loadAll(); } catch (_) {} }
+    if (typeof VH_STG.recheckFailed === "function") VH_STG.recheckFailed();
+  } else {
+    loadRecords(); // 后台悬浮查词可能已写入新记录
+    rolloverIfNeeded();
+    // 悬浮查词期间生词本已变化（新增/删除）：与启动时同样的同步流程，
+    // 否则悬浮条确认的生词要等下次重启才会进入 Review 队列
+    syncReviewWithWords();
+    migrateReview();
+  }
   if (resumeSig() !== sigBefore) renderAllQuiet();
   syncNotifyPermission(); // 通知提醒：权限/计划随回前台校正（含从系统通知设置页返回）
   if (overlayPending && hasBridge()) {

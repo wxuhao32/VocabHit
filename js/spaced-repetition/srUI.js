@@ -110,6 +110,42 @@
     return out;
   }
 
+  /** 已斩生词（只读 vc-review 持久化数据）：st.slain 标记的词，与当前内存队列无关。
+      斩卡时 nextAt 清零 + slain 持久化落盘（vc-review），重启后依然完整可查。 */
+  function slainPlan() {
+    var rv = readVC("vc-review");
+    var out = [];
+    if (rv && rv.words) {
+      Object.keys(rv.words).forEach(function (w) {
+        var st = rv.words[w];
+        if (st && st.slain) {
+          var f = st.fsrs || null;
+          out.push({
+            word: w,
+            slainAt: st.slainAt || 0,
+            fsrs: f ? {
+              s: (typeof f.s === "number") ? f.s : null,
+              d: (typeof f.d === "number") ? f.d : null,
+              dr: f.dr,
+              reps: f.reps || 0,
+              lapses: f.lapses || 0
+            } : null
+          });
+        }
+      });
+    }
+    out.sort(function (a, b) { return b.slainAt - a.slainAt; }); // 最近斩的在前
+    return out;
+  }
+
+  /** 斩卡日期短文案：MM-DD（无时间戳时返回空串） */
+  function slainDateLabel(ts) {
+    if (!ts) return "";
+    var d = new Date(ts);
+    var p = function (n) { return n < 10 ? "0" + n : "" + n; };
+    return (d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+
   /** FSRS 记忆状态一行文案（无 FSRS 状态时返回空串，行内不显示第二行） */
   function fsrsLabel(f) {
     if (!f) return "";
@@ -236,11 +272,15 @@
           <button class="back-btn" id="sr-vocab-back" type="button" aria-label="返回">${BACK_SVG}</button>
           <h1 class="page-title">生词复习计划</h1>
         </header>
+        <div class="segmented wide sr-vocab-seg" id="sr-vocab-seg" role="radiogroup" aria-label="生词队列视图">
+          <button class="seg-btn" data-vtab="queue" role="radio" aria-checked="true" type="button">队列中生词</button>
+          <button class="seg-btn" data-vtab="slain" role="radio" aria-checked="false" type="button">已斩生词</button>
+        </div>
         <p class="page-subtitle" id="sr-vocab-subtitle">按现有复习算法排列 · 点击单词查看释义</p>
         <ul class="sr-vocab-list" id="sr-vocab-list"></ul>
         <div class="sr-empty" id="sr-vocab-empty" hidden>
-          <p>暂无复习中的生词</p>
-          <p class="sr-empty-sub">把单词加入生词本后，这里会显示复习计划</p>
+          <p id="sr-vocab-empty-title">暂无复习中的生词</p>
+          <p class="sr-empty-sub" id="sr-vocab-empty-sub">把单词加入生词本后，这里会显示复习计划</p>
         </div>
       </main>
 
@@ -394,10 +434,42 @@
 
   /* ================= 生词复习计划（只读） ================= */
 
+  /* 切换态：queue = 队列中生词（现有复习计划）｜ slain = 已斩生词（持久化已斩状态） */
+  var vocabTab = "queue";
+
   function renderVocab() {
-    var list = vocabPlan();
-    var due = 0;
+    var segBtns = document.querySelectorAll("#sr-vocab-seg .seg-btn");
+    for (var si = 0; si < segBtns.length; si++) {
+      segBtns[si].setAttribute("aria-checked", segBtns[si].getAttribute("data-vtab") === vocabTab ? "true" : "false");
+    }
+
+    var list, due = 0, subtitle, emptyTitle, emptySub;
+    if (vocabTab === "slain") {
+      list = slainPlan().map(function (v) {
+        return { word: v.word, slainAt: v.slainAt, fsrs: v.fsrs, slain: true };
+      });
+      subtitle = "共 " + list.length + " 个已斩生词 · 点击单词查看释义";
+      emptyTitle = "暂无已斩生词";
+      emptySub = "在 Review 复习中点击「斩」，被斩的生词会出现在这里";
+    } else {
+      list = vocabPlan();
+      subtitle = "";
+      emptyTitle = "暂无复习中的生词";
+      emptySub = "把单词加入生词本后，这里会显示复习计划";
+    }
+
     var html = list.map(function (v, i) {
+      if (v.slain) {
+        var fl2 = fsrsLabel(v.fsrs);
+        var dl = slainDateLabel(v.slainAt);
+        return '<li class="sr-vocab-row slain" data-sr-word="' + esc(v.word) + '" style="animation-delay:' + Math.min(i, 20) * 25 + 'ms">' +
+          '<div class="sr-vocab-main">' +
+            '<span class="sr-vocab-word">' + esc(v.word) + "</span>" +
+            (fl2 ? '<span class="sr-vocab-fsrs">' + esc(fl2) + "</span>" : "") +
+          "</div>" +
+          '<span class="sr-vocab-time sr-vocab-slain">已斩' + (dl ? " " + dl : "") + "</span>" +
+          "</li>";
+      }
       var lb = timeLabel(v.nextAt);
       if (lb.due) due++;
       // 属性名必须用 data-sr-word：app.js 有全局 [data-word] 点击监听（记一次查询
@@ -413,7 +485,11 @@
     }).join("");
     $("#sr-vocab-list").innerHTML = html;
     $("#sr-vocab-empty").hidden = list.length > 0;
-    $("#sr-vocab-subtitle").textContent = "共 " + list.length + " 个词 · " + due + " 个今天需复习 · 点击查看释义";
+    $("#sr-vocab-empty-title").textContent = emptyTitle;
+    $("#sr-vocab-empty-sub").textContent = emptySub;
+    $("#sr-vocab-subtitle").textContent = vocabTab === "queue"
+      ? "共 " + list.length + " 个词 · " + due + " 个今天需复习 · 点击查看释义"
+      : subtitle;
   }
 
   function openVocab() {
@@ -1037,14 +1113,14 @@
       (asking
         ? '<input class="sr-q-input" id="sr-question-input" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="输入你的答案">'
         : reveal) +
-      "</div>" +
       (asking
-        ? '<div class="sr-rv-actions">' +
+        ? '<div class="sr-rv-actions sr-rv-actions-trio">' +
           '<button class="sr-rv-next" id="sr-question-submit" type="button">提交答案</button>' +
           '<button class="sr-rv-btn sr-rv-forgot" id="sr-rv-dunno" type="button">不会</button>' +
           '<button class="sr-rv-mastered" id="sr-rv-mastered" type="button">已经很熟 · 已掌握</button>' +
           "</div>"
-        : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>');
+        : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>') +
+      "</div>";
 
     if (asking) {
       var inp = $("#sr-question-input");
@@ -1090,14 +1166,14 @@
       '<p class="sr-cloze-text">' + clozeHtml + "</p>" +
       entryExtraHtml(entry) +
       banner +
-      "</div>" +
       (filling
-        ? '<div class="sr-rv-actions">' +
+        ? '<div class="sr-rv-actions sr-rv-actions-trio">' +
           '<button class="sr-rv-next" id="sr-cloze-submit" type="button">提交答案</button>' +
           '<button class="sr-rv-btn sr-rv-forgot" id="sr-rv-dunno" type="button">不会</button>' +
           '<button class="sr-rv-mastered" id="sr-rv-mastered" type="button">已经很熟 · 已掌握</button>' +
           "</div>"
-        : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>');
+        : '<div class="sr-rv-actions"><button class="sr-rv-next" id="sr-rv-next" type="button">下一条</button></div>') +
+      "</div>";
 
     if (filling) {
       var first = body.querySelector(".sr-cloze-input");
@@ -1120,7 +1196,6 @@
       (revealed
         ? '<div class="sr-rv-answer"><p class="sr-rv-content">' + esc(entry.content) + "</p>" + entryExtraHtml(entry) + "</div>"
         : "") +
-      "</div>" +
       (revealed
         ? '<div class="sr-rv-actions">' +
           '<button class="sr-rv-btn sr-rv-known" data-ans="known" type="button">记得</button>' +
@@ -1128,7 +1203,8 @@
           '<button class="sr-rv-btn sr-rv-forgot" data-ans="forgot" type="button">忘记</button>' +
           '<button class="sr-rv-mastered" id="sr-rv-mastered" type="button">已经很熟 · 已掌握</button>' +
           "</div>"
-        : "");
+        : "") +
+      "</div>";
   }
 
   function reviewNext() {
@@ -1284,6 +1360,13 @@
       if ((el = t.closest("#sr-entry"))) { openHub(); return; }
       if ((el = t.closest("#sr-vocab-entry"))) { openVocab(); return; }
       if ((el = t.closest("#sr-repo-entry"))) { openRepo(); return; }
+
+      // 生词复习计划：队列中生词 / 已斩生词 同页 Segmented 切换
+      if ((el = t.closest("#sr-vocab-seg .seg-btn"))) {
+        var vtab = el.getAttribute("data-vtab") === "slain" ? "slain" : "queue";
+        if (vtab !== vocabTab) { vocabTab = vtab; renderVocab(); }
+        return;
+      }
 
       // 返回
       if ((el = t.closest("#sr-back"))) { switchTab("settings"); return; }

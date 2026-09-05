@@ -33,6 +33,44 @@
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+  /* ---------- 词性标准化（唯一规则源，主应用 / 悬浮条 / 导出共用） ----------
+     词典原始数据存在旧式/异常词性标记：ECDICT 沿用旧词典约定（"a." 表形容词
+     约 3.7 万条、"ad." 表副词、"vbl." 表动词），考研词书也存在个别脏数据
+     （"vi. & ." / "vt. & vi. & ." / "n.n."）。展示层统一归一：
+       · a. → adj.    ad. → adv.    vbl. → v.    interj. → int.    n.n. → n.
+     · 复合词性（"vt. & vi. & ."）逐段归一，剔除空段（"."）与重复段；
+     · 语域/学科域标签（"[经]"、"<美俚>"）与其他语义不唯一的标记
+       （na./un./pl./comb./pref./suf./abbr. 等）原样保留，绝不猜测改写，
+       保证原本显示正确的词条零变化。 */
+  const POS_ALIASES = {
+    "a.": "adj.",
+    "ad.": "adv.",
+    "vbl.": "v.",
+    "interj.": "int.",
+    "n.n.": "n.",
+  };
+  function normPos(pos) {
+    const p = String(pos == null ? "" : pos).trim();
+    if (!p) return p;
+    const c0 = p.charAt(0);
+    if (c0 === "[" || c0 === "<") return p; // 域标签原样保留
+    if (p.indexOf("&") >= 0) {
+      const seen = new Set();
+      const out = [];
+      p.split("&").forEach((seg) => {
+        const s = normPos(seg); // 逐段递归：去空白 + 别名映射
+        if (!s || s === ".") return; // 空段（脏数据 "vt. & vi. & ."）剔除
+        const k = s.toLowerCase();
+        if (seen.has(k)) return; // 重复段去重
+        seen.add(k);
+        out.push(s);
+      });
+      return out.length ? out.join(" & ") : p;
+    }
+    const mapped = POS_ALIASES[p.toLowerCase()];
+    return mapped || p;
+  }
+
   /* 语域 / 学科 / 用法标签 → 该释义天然偏专业、生僻、冷门（rare 强信号）。
      词书释义前缀形如 [方] / [俚] / <美俚> / [非标准用语、方言] 等。 */
   const RARE_TAGS = ["方", "俚", "古", "语", "哲", "医", "体", "音", "乐", "化", "物", "数", "法", "经", "纺", "商", "军", "宗", "律", "美俚", "英俚", "生物", "电子", "非标准用语", "方言"];
@@ -85,7 +123,7 @@
         items.push({ m, ratio: globalRatio });
         return m;
       });
-      rows.push({ pos, meanings });
+      rows.push({ pos: normPos(pos), meanings });
     });
 
     // 2) 僻义标记（严格保守）：
@@ -134,7 +172,7 @@
     if (manual) {
       return {
         rows: manual.map((row) => ({
-          pos: row.pos,
+          pos: normPos(row.pos),
           meanings: row.meanings.map(([text, level, obscure]) => ({
             text,
             level: level === "rare" ? "rare" : level === "common" ? "common" : "normal",
@@ -215,6 +253,25 @@
     return (meanings || []).map(kySpan).join("；");
   }
 
+  /** 词典详情释义行 HTML（首页 App 与悬浮条共用，唯一渲染入口）：
+      - 命中考研词书 → 每行「词性 + 逐条等级着色释义 + 「僻」角标」，分级数据
+        来自 kyLevel 单一数据源（人工标注优先、算法兜底），不重新判定；
+      - 未命中考研词书（ECDICT / 大词典 / 用户自建词条）→ 回退为调用方给定的
+        纯文本释义行，保持原有显示方式，不套用任何等级颜色。
+      查询优先级（考研优先、EC 兜底）由调用方决定，本函数只负责渲染。
+      @param {string} word 查询词
+      @param {string[]} fallbackLines 非考研词书时的纯文本释义行（senseLines / lines 结果）
+      @param {string} cls 行容器 class（首页 "detail-meaning"、悬浮条 "d-line"）
+      @returns {string} 拼接后的 HTML */
+  function detailHtml(word, fallbackLines, cls) {
+    const lineCls = cls || "detail-meaning";
+    const g = kyLevel(word);
+    if (!g) return (fallbackLines || []).map((l) => `<p class="${lineCls}">${esc(l)}</p>`).join("");
+    return g.rows.map((row) =>
+      `<p class="${lineCls}">${row.pos ? `${esc(row.pos)} ` : ""}${kyJoin(row.meanings)}</p>`
+    ).join("");
+  }
+
   /** 选项文本分级渲染：与 topSensesText(word, n) 按索引对齐（前 n 个展平释义） */
   function kyOptionHtml(word, optionText) {
     const flat = kyFlatMeanings(word);
@@ -285,5 +342,5 @@
     });
   }
 
-  window.KY = { kyLevel, kyFlatMeanings, kyTopSenses, kySpan, kyJoin, kyOptionHtml, levelColors, exportLines, exportHtml, config: CFG };
+  window.KY = { kyLevel, kyFlatMeanings, kyTopSenses, kySpan, kyJoin, normPos, detailHtml, kyOptionHtml, levelColors, exportLines, exportHtml, config: CFG };
 })();
